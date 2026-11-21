@@ -1,10 +1,28 @@
 # token-optimiser
 
-Spend fewer tokens in a coding agent without changing how you work. One project for two hosts: a Claude Code plugin and an [oh-my-pi](https://github.com/can1357/oh-my-pi) (omp) extension, sharing one set of routing rules.
+**Your coding agent picks the cheapest Claude model that can do each job.** Replayed on 849 real turns (64 sessions, 30 days), routing each turn by its tier cost **35% less** than what those sessions were billed. Lookups go to Haiku, ordinary work to Sonnet, design and root-cause work to Opus, and the loop moves back down when the hard part is over.
 
-It does two things:
+For [Claude Code](https://docs.claude.com/en/docs/claude-code) (plugin) and [oh-my-pi](https://github.com/can1357/oh-my-pi) (omp extension), on one shared set of routing rules. MIT.
 
-1. **Routes each job to the cheapest model that can do it.** A lookup runs on Haiku, ordinary implementation on Sonnet, design and root-cause work on Opus. Subagents get a model by their type.
+```
+/plugin install token-optimiser --marketplace noodleTownHQ/token-optimiser
+```
+
+omp: clone the repo and add `omp/router.ts` to `extensions` in `~/.omp/agent/config.yml` ([details](#omp)).
+
+What it looks like in a live omp session (`~/.omp/agent/token-optimiser.jsonl`, trimmed):
+
+```
+12:34:19  169k tokens  light     read by model  keep    light work: already on the light model
+12:35:29  175k tokens  standard  read by model  switch  standard work: moved to the standard model
+12:38:02  187k tokens  heavy     read by model  switch  heavy work: moved to the heavy model
+```
+
+Every decision is logged with its reason, and every figure here can be rerun on your own sessions (`bun omp/replay.ts`, `bun omp/cost.ts`). Measurements and their dates: [FINDINGS.md](FINDINGS.md).
+
+## What it does
+
+1. **Routes each job to the cheapest model that can do it.** Haiku 5.5 reads each prompt (about half a second, $0.00003) and names a tier. Subagents get a model by their type.
 2. **Keeps large output out of the context** (Claude Code only: omp already does this itself). Long command output is trimmed, searches go to a cheap read-only agent, edits can address lines by a hash instead of retyping them.
 
 | | Claude Code | omp |
@@ -15,6 +33,8 @@ It does two things:
 | Trimmed output, scout agent, hashline edits | yes | built into omp |
 | Pattern rules, advisor, edit checks, guards | yes | built into omp |
 | Hint when a switched-off MCP server is needed | no | yes |
+
+The 35% is an estimate from a replay of one person's sessions, not a bill; how it was measured and what it assumes is under [Why it moves down](#why-it-moves-down-in-a-long-session).
 
 ## How routing decides
 
