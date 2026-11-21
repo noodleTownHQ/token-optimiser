@@ -76,6 +76,12 @@ To try it for one run: `omp -e ~/src/token-optimiser/omp/router.ts`.
 
 Settings are optional. Copy [`examples/omp-config.json`](examples/omp-config.json) to `~/.omp/agent/token-optimiser.json` and edit it; the file is read on every prompt, so a change applies at once.
 
+One omp setting is needed when a session's context can pass 100,000 tokens. omp's catalog lists Haiku 5.5 with a 100,000-token window, so above that it tries to compact the conversation whenever the router moves to the light model. Give Haiku the limit your other models have:
+
+```
+omp config set compaction.modelThresholds '{"anthropic/claude-haiku-5-5":250000}'
+```
+
 ## Settings
 
 ### Claude Code
@@ -140,6 +146,7 @@ The main-loop models must be full ids; the engine refuses an alias such as `haik
 - Claude Code reports the session model's context window whichever model a request runs on.
 - On an API key the quota guard does nothing: there is no 7-day limit to read.
 - In Claude Code a session on a model that is none of the three tiers moves only while its context is small.
+- In omp, without the `compaction.modelThresholds` setting above, a move to Haiku 5.5 above 100,000 tokens of context triggers compaction.
 - No before-and-after cost figure is published yet.
 
 ## Layout
