@@ -1,13 +1,63 @@
 {
-  "name": "lean",
-  "version": "0.4.0",
-  "description": "omp-style token savers and guards: hashline edits, trimmed tool output, a Haiku scout agent, checks after each edit, pattern rules, push and mount guards, and a /lean report",
+  "name": "token-optimiser",
+  "version": "0.5.0",
+  "description": "Spend fewer tokens for the same work: the model follows the job (a cheaper one for lookups and subagents, the strong one for design), and tool output, edits and searches are kept small. A /tokens report shows what it did",
   "author": {
     "name": "noodleTownHQ"
   },
+  "homepage": "https://github.com/noodleTownHQ/token-optimiser",
+  "repository": "https://github.com/noodleTownHQ/token-optimiser",
   "license": "MIT",
   "types": "./types/index.d.ts",
   "userConfig": {
+    "route": {
+      "type": "boolean",
+      "title": "Route models by the job",
+      "description": "Choose the main loop's model from each prompt (read by the light model, by rules when that fails) and each subagent's model from its type. A model you pick with /model is left alone for the rest of the session",
+      "default": true
+    },
+    "lightModel": {
+      "type": "string",
+      "title": "Light model",
+      "description": "Full model id for lookups and mechanical requests in the main loop (an alias such as haiku is refused there). It also reads each prompt to choose the tier",
+      "default": "claude-haiku-5-5"
+    },
+    "standardModel": {
+      "type": "string",
+      "title": "Standard model",
+      "description": "Full model id for ordinary work in the main loop",
+      "default": "claude-sonnet-5-5"
+    },
+    "heavyModel": {
+      "type": "string",
+      "title": "Heavy model",
+      "description": "Full model id for design, root-cause and multi-file work in the main loop",
+      "default": "claude-opus-5-5"
+    },
+    "contextCeilingTokens": {
+      "type": "number",
+      "title": "Switch only below (tokens)",
+      "description": "The main loop moves to a cheaper model only while its context holds at most this many tokens more than an empty session's; past that the prompt cache is worth more than the move saves. It moves to a stronger model at any size",
+      "default": 30000
+    },
+    "holdHeavyAtPercent": {
+      "type": "number",
+      "title": "Hold heavy work at (% of the 7-day limit)",
+      "description": "On a plan login, once this much of the 7-day limit is used, heavy work runs on the standard model",
+      "default": 70
+    },
+    "lightOnlyAtPercent": {
+      "type": "number",
+      "title": "Light only at (% of the 7-day limit)",
+      "description": "On a plan login, once this much of the 7-day limit is used, everything runs on the light model",
+      "default": 90
+    },
+    "subagentTiers": {
+      "type": "string",
+      "title": "Subagent tiers",
+      "description": "JSON object of agent type to light, standard or heavy, replacing the built-in table ({\"Explore\":\"light\",\"general-purpose\":\"standard\",\"Plan\":\"heavy\"}). A plugin's agent matches by its bare name too. An agent not listed keeps its own model",
+      "default": ""
+    },
     "diagnostics": {
       "type": "boolean",
       "title": "Check files after each edit",
@@ -23,13 +73,13 @@
     "rulesFile": {
       "type": "string",
       "title": "Rules file",
-      "description": "Absolute path to a JSON array of pattern rules applied to every tool call (a project's .claude/lean-rules.json is read too). Empty: project rules only",
+      "description": "Absolute path to a JSON array of pattern rules applied to every tool call (a project's .claude/token-optimiser-rules.json is read too). Empty: project rules only",
       "default": ""
     },
     "trimChars": {
       "type": "number",
       "title": "Trim output over (characters)",
-      "description": "Bash and Grep output longer than this keeps its head and tail; the full text is saved to a file",
+      "description": "Bash output longer than this keeps its head and tail; the full text is saved to a file",
       "default": 10000
     },
     "protectBranch": {

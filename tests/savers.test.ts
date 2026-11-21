@@ -1,7 +1,8 @@
-import { describe, expect, mock, test } from 'claude-code/testing'
+import { describe, expect, test } from 'claude-code/testing'
 import type { On, TurnStepChunk } from 'claude-code'
 
 import { addedFileMounts, checkerFor, hashLine, isGuardedYaml, matchRules, parseAdvice, parseRules, planEdit, pushesBranch, streamHit, tagLines, trimMiddle } from '../hooks/lib'
+import { START, world } from './world'
 
 const FILE = 'alpha\nbeta\ngamma\ndelta\n'
 const at = (n: number) => `${n}:${hashLine(FILE.split('\n')[n - 1]!)}`
@@ -60,7 +61,7 @@ describe('rules', () => {
     expect(main('git -C /r push --all')).toBe(true)
     expect(main('git push -u origin claude/feature')).toBe(false)
     expect(main('git push origin main --dry-run')).toBe(false)
-    expect(main('LEAN_ALLOW_PUSH=1 git push origin main')).toBe(false)
+    expect(main('TOKEN_OPTIMISER_ALLOW_PUSH=1 git push origin main')).toBe(false)
     expect(main('git log main')).toBe(false)
     expect(main('git -C /tmp/other push origin main', '/repo')).toBe(false)
     expect(main('cd /tmp/other && git push origin main', '/repo')).toBe(false)
@@ -81,7 +82,7 @@ describe('rules', () => {
     expect(addedFileMounts('    - ./config/:/app/config', '')).toEqual([])
     expect(addedFileMounts('    - /var/run/docker.sock:/var/run/docker.sock', '')).toEqual([])
     expect(addedFileMounts('        source: ../x/app.env', '')).toEqual(['../x/app.env'])
-    expect(addedFileMounts('    - ./a.yml:/a.yml # lean: file-mount-ok', '')).toEqual([])
+    expect(addedFileMounts('    - ./a.yml:/a.yml # token-optimiser: file-mount-ok', '')).toEqual([])
     expect(addedFileMounts('    - ./a.yml:/a.yml', '    - ./a.yml:/a.yml')).toEqual([])
   })
 
@@ -96,24 +97,6 @@ describe('rules', () => {
   })
 })
 
-// The engine beneath the plugin: just enough of it to start a session.
-const world = (on: On, files: Record<string, string>, written: Record<string, string>) => {
-  mock.store(on)
-  on('session.start', ($, e) => ({ cwd: e.cwd }))
-  on('fs.exists', () => ({ value: true }))
-  on('fs.read', ($, e) => ({ value: files[e.path] ?? '' }))
-  on('fs.write', ($, e) => {
-    written[e.path] = e.text
-    return { value: undefined }
-  })
-  on('session.cwd', () => ({ value: '/repo' }))
-  on('tool.register', ($, e) => ({ value: { tool: `mcp__lean__${e.name}` } }))
-  on('agent.register', ($, e) => ({ value: { agent: `lean:${e.name}` } }))
-  on('command.register', ($, e) => ({ value: { command: e.name } }))
-}
-
-const START = { cwd: '/repo', surface: null, isInteractive: true } as const
-
 describe('hooks', () => {
   test('long Bash output is trimmed and saved whole', async ($, on) => {
     const written: Record<string, string> = {}
@@ -125,7 +108,7 @@ describe('hooks', () => {
     const r = await $.tool.call({ tool: 'Bash', command: 'seq 3000' })
     if (r.deny !== undefined || r.isError === true) throw new Error('Bash failed')
     expect(r.result.stdout.length).toBeLessThan(big.length)
-    expect(r.result.stdout).toContain('[lean: cut')
+    expect(r.result.stdout).toContain('[token-optimiser: cut')
     expect(Object.values(written)).toContain(big)
   })
 
@@ -135,7 +118,7 @@ describe('hooks', () => {
 
     await $.session.start(START)
     const r = await $.tool.call({ tool: 'Bash', command: 'git push origin main' })
-    expect(r.deny ?? (r.isError === true ? r.text : undefined)).toContain('LEAN_ALLOW_PUSH=1')
+    expect(r.deny ?? (r.isError === true ? r.text : undefined)).toContain('TOKEN_OPTIMISER_ALLOW_PUSH=1')
   })
 
   test('HashRead then HashEdit writes the file without a nested Edit call', async ($, on) => {
@@ -151,10 +134,10 @@ describe('hooks', () => {
     })
 
     await $.session.start(START)
-    const read = await $.tool.call({ tool: 'mcp__lean__HashRead', path: 'a.txt' } as never)
+    const read = await $.tool.call({ tool: 'mcp__token-optimiser__HashRead', path: 'a.txt' } as never)
     expect(String((read as { result?: unknown }).result)).toContain(`${at(2)}|beta`)
 
-    const done = await $.tool.call({ tool: 'mcp__lean__HashEdit', path: 'a.txt', edits: [{ start: at(3), text: 'GAMMA $& $1' }] } as never)
+    const done = await $.tool.call({ tool: 'mcp__token-optimiser__HashEdit', path: 'a.txt', edits: [{ start: at(3), text: 'GAMMA $& $1' }] } as never)
     expect(String((done as { result?: unknown }).result)).toContain('Edited /repo/a.txt')
     expect(edits).toBe(0)
     expect(written['/repo/a.txt']).toBe('alpha\nbeta\nGAMMA $& $1\ndelta\n')
@@ -166,7 +149,7 @@ describe('hooks', () => {
     on('tool.check', () => ({ decision: 'deny', reason: 'protected path' }))
 
     await $.session.start(START)
-    const done = await $.tool.call({ tool: 'mcp__lean__HashEdit', path: 'a.txt', edits: [{ start: at(3), text: 'X' }] } as never)
+    const done = await $.tool.call({ tool: 'mcp__token-optimiser__HashEdit', path: 'a.txt', edits: [{ start: at(3), text: 'X' }] } as never)
     expect(done.deny ?? (done.isError === true ? done.text : undefined)).toContain('protected path')
     expect(written['/repo/a.txt']).toBeUndefined()
   })
@@ -191,7 +174,7 @@ describe('pattern rules and checks', () => {
     expect(matchRules(rules, 'Edit', { new_string: 'image: foo:latest' }).map(r => r.name)).toEqual(['no-latest'])
     expect(matchRules(rules, 'Bash', { command: 'npm install x' })).toHaveLength(1)
     expect(matchRules(rules, 'Write', { content: 'npm install x' })).toHaveLength(0)
-    expect(matchRules(rules, 'mcp__lean__HashEdit', { edits: [{ text: 'a:latest' }] })).toHaveLength(1)
+    expect(matchRules(rules, 'mcp__token-optimiser__HashEdit', { edits: [{ text: 'a:latest' }] })).toHaveLength(1)
   })
 
   test('checkerFor picks a checker by extension', () => {
@@ -215,7 +198,7 @@ describe('pattern rules and checks', () => {
   })
 
   test("a project's advisory rule runs the call and hands the rule along", async ($, on) => {
-    world(on, { '/repo/.claude/lean-rules.json': RULES }, {})
+    world(on, { '/repo/.claude/token-optimiser-rules.json': RULES }, {})
     on('tool.call', { tool: 'Bash' }, () => ({ result: { stdout: 'ok', stderr: '', interrupted: false } }))
     await $.session.start(START)
     const r = await $.tool.call({ tool: 'Bash', command: 'npm install left-pad' })
@@ -296,11 +279,11 @@ describe('stream rules and the advisor', () => {
     const { chunks, r } = await drain($.turn.step(STEP))
 
     expect(chunks.filter(c => c.kind === 'text').map(c => (c as { text: string }).text)).toEqual(['Easiest is '])
-    expect(chunks.find(c => c.kind === 'tool')).toMatchObject({ name: 'mcp__lean__Rule', index: 1 })
+    expect(chunks.find(c => c.kind === 'tool')).toMatchObject({ name: 'mcp__token-optimiser__Rule', index: 1 })
     expect(r.stopReason).toBe('tool_use')
     expect(JSON.stringify(r.toolUses)).toContain("Don't reach for Box::leak.")
 
-    const ruled = await $.tool.call({ tool: 'mcp__lean__Rule', rule: 'x' } as never)
+    const ruled = await $.tool.call({ tool: 'mcp__token-optimiser__Rule', rule: 'x' } as never)
     expect(String((ruled as { result?: unknown }).result)).toContain('Carry on from there')
   })
 

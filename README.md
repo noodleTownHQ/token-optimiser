@@ -1,17 +1,125 @@
-# lean
+# token-optimiser
 
-A Claude Code mod that borrows [oh-my-pi](https://github.com/can1357/oh-my-pi)'s token savers.
+Spend fewer tokens in a coding agent without changing how you work. One project for two hosts: a Claude Code plugin and an [oh-my-pi](https://github.com/can1357/oh-my-pi) (omp) extension, sharing one set of routing rules.
 
-- **Trimmed output.** Bash output (grep and rg included) over 10,000 characters (configurable) keeps its head and tail; the full text is saved to `/tmp/claude-lean/<id>.txt` and the output names the file, so Claude reads the middle only when it needs it. Output large enough for Claude Code to save to a file itself is left alone.
-- **`lean:scout`.** A read-only search agent on Haiku that answers with `path:line` hits instead of file dumps; a short system-prompt note tells Claude to send searches there.
-- **Hashline edits (an experiment).** `HashRead` tags each line `LINE:HASH|text`; `HashEdit` changes lines by those anchors instead of retyping the old text, refuses stale anchors, and writes the file once the HashEdit call itself is approved (a nested Edit call would be refused by auto mode, which sees no request behind it); an Edit deny rule for the path still refuses it.
-- **Optional guards** (off by default):
-  - *Protected branch:* refuses `git push` to a branch you name (say `main`, where a push deploys). Prefix the command with `LEAN_ALLOW_PUSH=1` for a push you asked for.
-  - *Single-file bind mounts:* refuses relative single-file bind mounts in compose YAML under a folder you name. When git replaces such a file, the container keeps the old inode. End a line with `# lean: file-mount-ok` to allow one.
-- **Checks after each edit** (on by default, like omp's LSP diagnostics but lighter). After Edit, Write or HashEdit, a fast checker for the file type runs and its errors reach Claude with the result: `ruff` limited to syntax errors and undefined names for Python (so old lint debt stays quiet), `bash -n` for shell, a JSON parse for `.json`. A checker that is not installed stays silent. TypeScript is left out: `tsc` is too slow to run per edit, and a real language server (omp's LSP) needs a pipe a mod cannot hold open: `$.process.spawn` writes its input once and closes it.
-- **Pattern rules** (omp's time-traveling stream rules). A JSON array of rules, from the `rulesFile` setting and from a project's `.claude/lean-rules.json`. Two kinds:
-  - *Stream rules* (`"stream": true`) watch Claude's reply as it streams. On a match the reply stops there, and the step ends with a call to lean's `Rule` tool whose result is the rule, so Claude reads it and carries on from that point. Each rule interrupts a turn once. Unlike omp, the cut-off text stays in the transcript and the rule arrives as a tool result rather than a system reminder: a Claude Code mod cannot rewrite the request.
-  - *Tool-call rules* (the default) match what a call runs or writes (a Bash command, an Edit's new text, a Write's content); with `block: true` the call is refused with the rule, otherwise it runs and the rule is handed to Claude with its result.
+It does two things:
+
+1. **Routes each job to the cheapest model that can do it.** A lookup runs on Haiku, ordinary implementation on Sonnet, design and root-cause work on Opus. Subagents get a model by their type.
+2. **Keeps large output out of the context** (Claude Code only: omp already does this itself). Long command output is trimmed, searches go to a cheap read-only agent, edits can address lines by a hash instead of retyping them.
+
+| | Claude Code | omp |
+|---|---|---|
+| Main-loop routing | yes | yes |
+| Subagent routing | yes | yes |
+| 7-day quota guard | yes (plan login) | yes |
+| Trimmed output, scout agent, hashline edits | yes | built into omp |
+| Pattern rules, advisor, edit checks, guards | yes | built into omp |
+| Hint when a switched-off MCP server is needed | no | yes |
+
+## How routing decides
+
+Every decision follows the same steps, and each one is written down (see [Seeing why](#seeing-why)).
+
+1. **Is any move open?** While the context is small (at most `contextCeilingTokens` above an empty session's), the main loop may move to any tier. Past that it may only move **up**. A move down would abandon a prompt cache worth more than the cheaper model saves; a move up is allowed because an answer from too weak a model wastes more than one cache rewrite. If no move is open, the prompt is not read at all and nothing is spent.
+2. **Read the prompt.** The light model (Haiku 5.5 by default) is shown the prompt and the end of the assistant's last reply, and answers with one word: `light`, `standard` or `heavy`. The last reply is there so that "yes, do it" takes the tier of the work that was proposed. If the call fails or takes more than 5 seconds, a fixed set of rules (keywords, length, number of files named) reads the prompt instead.
+3. **Apply the quota guard.** On a plan login, once 70% of the 7-day limit is used, heavy work runs on the standard model; from 90% everything runs on the light model. On an API key there is no limit to read and nothing is held.
+4. **Move, or stay.** The loop moves when the tier is open and differs from the one it is on. The choice holds until a later prompt changes it.
+
+Only step 2 is a model's judgement. Steps 1, 3 and 4 are plain functions in [`core/router.ts`](core/router.ts): the same inputs always give the same decision.
+
+A model you pick by hand (`/model`) is left alone for the rest of the session.
+
+**Subagents** start with an empty context, so their model costs no cache to choose. Each agent type has a tier (Claude Code: `Explore` light, `general-purpose` standard, `Plan` heavy; omp: `scout`, `explore`, `sonic` light, `task` standard, `reviewer`, `security-reviewer`, `plan` heavy). A type not in the table, and a call that names its own model, are left alone. You can replace the table.
+
+### Seeing why
+
+- Claude Code: `/tokens` shows the model the loop is on, the counts, and what happened to the last prompt, for example `heavy work, held to standard by the quota guard: moved to the standard model (read by the light model)`.
+- omp: every decision is a line in `~/.omp/agent/token-optimiser.jsonl` with the context size, the quota, the tier asked for, who read the prompt (`model` or `rules`), the action and the reason.
+
+### What reading a prompt costs
+
+Measured on 21 Nov 2026 with Haiku 5.5 through omp, 18 prompts read three times each (54 calls):
+
+| | Result |
+|---|---|
+| Median time per read | 529 ms (longest 682 ms) |
+| Cost per read | $0.00003 |
+| Same answer all three times | 18 of 18 prompts |
+| Agreed with the expected tier | 18 of 18 by the model, 15 of 18 by the rules |
+
+The 18 prompts and their expected tiers were written by the author, so this is a smoke test, not a benchmark. The three the rules missed were follow-ups ("yes, do it", "ok go"), which rules cannot read.
+
+## Install
+
+### Claude Code
+
+Needs a Claude Code version with mods (function hooks); run `claude update` first if `/tokens` is unknown after installing.
+
+```
+/plugin install token-optimiser --marketplace noodleTownHQ/token-optimiser
+```
+
+or from a shell: `claude plugin install token-optimiser --marketplace noodleTownHQ/token-optimiser`.
+
+### omp
+
+Clone the repository and add the extension to `~/.omp/agent/config.yml`:
+
+```yaml
+extensions:
+  - ~/src/token-optimiser/omp/router.ts
+```
+
+To try it for one run: `omp -e ~/src/token-optimiser/omp/router.ts`.
+
+Settings are optional. Copy [`examples/omp-config.json`](examples/omp-config.json) to `~/.omp/agent/token-optimiser.json` and edit it; the file is read on every prompt, so a change applies at once.
+
+## Settings
+
+### Claude Code
+
+Set in the config menu (`/config`), or in `~/.claude/settings.json` under `pluginConfigs`.
+
+| Setting | Default | What it does |
+|---|---|---|
+| `route` | `true` | Model routing, main loop and subagents |
+| `lightModel` | `claude-haiku-5-5` | Model for light work; it also reads each prompt |
+| `standardModel` | `claude-sonnet-5-5` | Model for ordinary implementation |
+| `heavyModel` | `claude-opus-5-5` | Model for design and root-cause work |
+| `contextCeilingTokens` | `30000` | The loop moves down only while its context is at most this far above an empty session's |
+| `holdHeavyAtPercent` | `70` | Share of the 7-day limit from which heavy work runs on the standard model |
+| `lightOnlyAtPercent` | `90` | Share of the 7-day limit from which everything runs on the light model |
+| `subagentTiers` | built-in table | JSON object of agent type to `light`, `standard` or `heavy` |
+| `trimChars` | `10000` | Output longer than this is trimmed |
+| `diagnostics` | `true` | Run a checker after each edit |
+| `advisorModel` | empty (off) | Model that reviews each turn, e.g. `opus` |
+| `rulesFile` | empty | Absolute path to your own rules file (a project's `.claude/token-optimiser-rules.json` is read either way) |
+| `protectBranch` | empty (off) | Branch whose pushes are refused |
+| `pushNote` | empty | Why, shown to Claude when it refuses |
+| `mountGuardPath` | empty (off) | Path fragment of the compose folder to guard, e.g. `deploy/compose/` |
+
+The main-loop models must be full ids; the engine refuses an alias such as `haiku` there.
+
+### omp
+
+`~/.omp/agent/token-optimiser.json`; every key is optional.
+
+| Key | Default | What it does |
+|---|---|---|
+| `enabled` | `true` | Switch the extension off without removing it |
+| `tiers` | Haiku 5.5, Sonnet 5.5, Opus 5.5 | Tier to model, as `provider/id` |
+| `contextCeilingTokens` | `30000` | As above |
+| `quotaGuard` | `{ "enabled": true, "holdHeavyAt": 0.7, "lightOnlyAt": 0.9 }` | As above, as fractions |
+| `subagents` | built-in table | Agent type to tier; replaces the table |
+| `mcpHints` | `{}` | MCP server to a pattern. When a prompt matches and the server is switched off, you are told once how to turn it on |
+
+## The other savers (Claude Code)
+
+- **Trimmed output.** Bash output over `trimChars` characters keeps its head and tail; the full text is saved to `/tmp/token-optimiser/<id>.txt` and the output names the file, so Claude reads the middle only when it needs it.
+- **`token-optimiser:scout`.** A read-only search agent on Haiku that answers with `path:line` hits instead of file dumps; a short system-prompt note tells Claude to send searches there.
+- **Hashline edits (an experiment).** `HashRead` tags each line `LINE:HASH|text`; `HashEdit` changes lines by those anchors instead of retyping the old text and refuses stale anchors. `/tokens hashline on|off` switches it from the next session, and `/tokens` compares output tokens per turn with it on and off.
+- **Checks after each edit.** A fast checker for the file type runs and its errors reach Claude with the result: `ruff` (syntax errors and undefined names) for Python, `bash -n` for shell, a JSON parse for `.json`. A checker that is not installed stays silent.
+- **Pattern rules.** A JSON array of rules from `rulesFile` and from a project's `.claude/token-optimiser-rules.json`. A tool-call rule matches what a call runs or writes and is handed to Claude with the result, or refuses the call with `block: true`. A stream rule (`"stream": true`) stops Claude's reply where it matches and hands it the rule.
 
   ```json
   [
@@ -21,56 +129,32 @@ A Claude Code mod that borrows [oh-my-pi](https://github.com/can1357/oh-my-pi)'s
   ]
   ```
 
-  Fields: `match` (regex, required), `rule` (text, required), `flags`, `tool` (only this tool), `name`, `block` (tool-call rules), `stream`.
-- **Advisor** (omp's advisor role, off by default). Name a model in `advisorModel` (say `opus`) and it reads each finished turn of the main loop: the request, what the agent said, the tools it called. A concern or blocker goes back to the agent before it stops, which then deals with it or says why not; an aside shows as a toast. One extra request per turn.
-- **`/lean`.** This session's tokens, cost and estimated savings, plus output tokens per turn with hashline on versus off across sessions. `/lean hashline on|off` switches it from the next session.
+- **Advisor** (off by default). Name a model in `advisorModel` and it reads each finished turn; a concern goes back to the agent before it stops. One extra request per turn.
+- **Guards** (off by default). `protectBranch` refuses `git push` to a branch you name; prefix a push you asked for with `TOKEN_OPTIMISER_ALLOW_PUSH=1`. `mountGuardPath` refuses relative single-file bind mounts in compose YAML under a folder; end a line with `# token-optimiser: file-mount-ok` to allow one.
 
-Savings are estimates (4 characters per token); the hashline on/off comparison is the real test. Claude is already good at its own Edit tool, so hashline's gain is mainly on large edits.
+## Limits
 
-## Install
+- Savings shown by `/tokens` for trimmed output are estimates (4 characters per token).
+- Claude Code reports the session model's context window whichever model a request runs on.
+- On an API key the quota guard does nothing: there is no 7-day limit to read.
+- In Claude Code a session on a model that is none of the three tiers moves only while its context is small.
+- No before-and-after cost figure is published yet.
 
-Needs a Claude Code version with mods (function hooks); `claude update` first if `/lean` is unknown after installing.
-
-From a shell:
-
-```
-claude plugin install lean --marketplace noodleTownHQ/claude-lean
-```
-
-At the prompt of a terminal session:
+## Layout
 
 ```
-/plugin install lean --marketplace noodleTownHQ/claude-lean
+core/    the routing rules: pure functions, no host code
+omp/     the omp extension
+hooks/   the Claude Code mod
+tests/   Claude Code tests (claude plugin test)
 ```
-
-On an older version without `--marketplace`:
-
-```
-claude plugin marketplace add noodleTownHQ/claude-lean
-claude plugin install lean@claude-lean
-```
-
-In the desktop app, where `/plugin` does not run: click + next to the prompt box, then Plugins, Add marketplace with `noodleTownHQ/claude-lean`, then Add plugin.
-
-## Settings
-
-Set in the config menu (`/config`), or in `~/.claude/settings.json` under `pluginConfigs`:
-
-| Setting | Default | What it does |
-|---|---|---|
-| `trimChars` | `10000` | Output longer than this is trimmed |
-| `diagnostics` | `true` | Run a checker after each edit |
-| `advisorModel` | empty (off) | Model that reviews each turn, e.g. `opus` |
-| `rulesFile` | empty | Absolute path to your own rules file (projects' `.claude/lean-rules.json` is read either way) |
-| `protectBranch` | empty (off) | Branch whose pushes are refused |
-| `pushNote` | empty | Why, shown to Claude when it refuses |
-| `mountGuardPath` | empty (off) | Path fragment of the compose folder to guard, e.g. `deploy/compose/` |
 
 ## Develop
 
 ```
-claude plugin validate .
+bun test core omp
 claude plugin test .
+claude plugin validate .
 ```
 
 ## License

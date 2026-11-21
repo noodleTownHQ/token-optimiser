@@ -1,6 +1,6 @@
 {
-  "name": "claude-lean",
+  "name": "token-optimiser",
   "owner": { "name": "noodleTownHQ" },
-  "description": "lean: a Claude Code mod with oh-my-pi-style token savers",
-  "plugins": [{ "name": "lean", "source": "./" }]
+  "description": "token-optimiser: the model follows the job, and tool output stays small. One plugin for Claude Code and omp",
+  "plugins": [{ "name": "token-optimiser", "source": "./" }]
 }

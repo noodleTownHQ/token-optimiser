@@ -1,5 +1,12 @@
 // Pure helpers: no `$`, so the tests can drive them directly.
 
+/** The mod's name: its tools are mcp__<MOD>__<name>, its agent <MOD>:scout, and its notes to Claude start with it. */
+export const MOD = 'token-optimiser'
+/** Put before a `git push` to the protected branch, it clears that push; for when the person asked for it. */
+export const ALLOW_PUSH = 'TOKEN_OPTIMISER_ALLOW_PUSH=1'
+/** In a comment at the end of a compose line, it clears that one single-file bind mount. */
+export const MOUNT_OK = `${MOD}: file-mount-ok`
+
 // FNV-1a over the line's UTF-16 units, last three base-36 digits.
 export const hashLine = (line: string): string => {
   let h = 0x811c9dc5
@@ -131,16 +138,16 @@ export const trimMiddle = (text: string, limit: number, keepHead: number, keepTa
   const tail = text.slice(tailStart > 0 ? tailStart + 1 : text.length - keepTail)
   const middle = text.slice(head.length, text.length - tail.length)
   const cutLines = middle.split('\n').length - 1
-  const note = `\n[lean: cut ${cutLines} lines (${middle.length} chars) from the middle. Full output: ${savedTo} (Read it with offset/limit, or grep it)]\n`
+  const note = `\n[${MOD}: cut ${cutLines} lines (${middle.length} chars) from the middle. Full output: ${savedTo} (Read it with offset/limit, or grep it)]\n`
   return { text: head + note + tail, cutLines, cutChars: middle.length - note.length }
 }
 
 const escape = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
 
-// A `git push` that names `branch` (or pushes everything) and was not cleared with LEAN_ALLOW_PUSH=1.
+// A `git push` that names `branch` (or pushes everything) and was not cleared with ALLOW_PUSH.
 // A push run in another repository (`git -C <dir>` or `cd <dir>` outside `cwd`) is not this project's.
 export const pushesBranch = (command: string, branch: string, cwd = ''): boolean => {
-  if (branch === '' || /\bLEAN_ALLOW_PUSH=1\b/.test(command)) return false
+  if (branch === '' || new RegExp(`\\b${ALLOW_PUSH}\\b`).test(command)) return false
   const named = new RegExp(`^\\+?(?:\\S*:)?(?:refs/heads/)?${escape(branch)}$`)
   const isElsewhere = (dir: string) =>
     cwd !== '' && dir.startsWith('/') && dir !== cwd && !dir.startsWith(cwd.replace(/\/$/, '') + '/')
@@ -170,7 +177,7 @@ export const addedFileMounts = (newText: string, oldText: string): string[] => {
   const old = new Set(oldText.split('\n').map(l => l.trim()))
   const found: string[] = []
   for (const line of newText.split('\n')) {
-    if (old.has(line.trim()) || line.includes('lean: file-mount-ok')) continue
+    if (old.has(line.trim()) || line.includes(MOUNT_OK)) continue
     const short = /^\s*-\s*["']?(\.{1,2}\/[^\s:"']*)\s*:\s*\//.exec(line)
     const long = /^\s*source:\s*["']?(\.{1,2}\/[^\s"']*)/.exec(line)
     const source = short?.[1] ?? long?.[1]

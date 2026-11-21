@@ -2,22 +2,24 @@ import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register, StreamNext, TurnStepChunk, TurnStepInput, TurnStepResult, TurnUsage } from 'claude-code'
 
 import type { SessionStats, Tally } from '../types'
-import { addedFileMounts, checkerFor, isGuardedYaml, matchRules, parseAdvice, parseRules, planEdit, pushesBranch, streamHit, tagLines, trimMiddle } from './lib'
+import { ALLOW_PUSH, MOD, MOUNT_OK, addedFileMounts, checkerFor, isGuardedYaml, matchRules, parseAdvice, parseRules, planEdit, pushesBranch, streamHit, tagLines, trimMiddle } from './lib'
 import type { HashEditOp, LoadedRule } from './lib'
+import { agentModel, mainModel, newRoute, routeLine, routingFrom } from './route'
 
 // Output past `trimChars` (default 10,000) keeps 40% head and 30% tail; the full text goes to OUT_DIR.
-const OUT_DIR = '/tmp/claude-lean'
+const OUT_DIR = `/tmp/${MOD}`
 
-const HASH_READ = 'mcp__lean__HashRead'
-const HASH_EDIT = 'mcp__lean__HashEdit'
-const SCOUT = 'lean:scout'
+const HASH_READ = `mcp__${MOD}__HashRead`
+const HASH_EDIT = `mcp__${MOD}__HashEdit`
+const SCOUT = `${MOD}:scout`
 
 const zero = (): Tally => ({ turns: 0, input: 0, output: 0, cacheRead: 0, cacheWrite: 0 })
 const fresh = (): SessionStats => ({
   main: zero(), sub: zero(), trims: 0, charsCut: 0,
   hashReads: 0, hashEdits: 0, hashEditFails: 0, editCharsSaved: 0, guards: 0,
 })
-const stats = atom({ plugin: 'lean', key: 'stats' } as const, fresh())
+// The engine's scan reads an atom's plugin and key as string literals, so the name is spelled out here.
+const stats = atom({ plugin: 'token-optimiser', key: 'stats' } as const, fresh())
 
 type Lifetime = Record<'on' | 'off', Tally & { sessions: number }>
 
@@ -47,14 +49,14 @@ const diagnose = async ($: EngineInterface, path: string): Promise<string | unde
   const r = await $.process.run(argv, { timeoutMs: 15_000 }).catch(() => undefined)
   if (!r || r.exitCode === 0) return undefined
   const out = `${r.stdout}\n${r.stderr}`.trim().slice(0, 2_000)
-  return `lean: ${argv[0]} found problems in ${path} after this change; fix them before moving on:\n${out}`
+  return `${MOD}: ${argv[0]} found problems in ${path} after this change; fix them before moving on:\n${out}`
 }
 
-const ruleNote = (r: LoadedRule) => `lean rule${r.name ? ` "${r.name}"` : ''}: ${r.rule}`
+const ruleNote = (r: LoadedRule) => `${MOD} rule${r.name ? ` "${r.name}"` : ''}: ${r.rule}`
 
-const RULE_TOOL = 'mcp__lean__Rule'
+const RULE_TOOL = `mcp__${MOD}__Rule`
 
-// A tool_use id of the API's shape for the call lean makes in Claude's place.
+// A tool_use id of the API's shape for the call the mod makes in Claude's place.
 const toolUseId = () => {
   const abc = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789'
   const bytes = crypto.getRandomValues(new Uint8Array(24))
@@ -82,7 +84,7 @@ const guide = (tools: readonly string[]): string | undefined => {
     lines.push(`- Send searches across many files, and other look-up work whose answer is a few paths and lines, to the ${SCOUT} agent (a cheap, fast model) rather than reading the files yourself.`)
   }
   lines.push('- Long Bash output arrives trimmed to its head and tail, with the full text saved to a file the output names. When you need the middle, read that file with offset/limit or grep it rather than running the command again.')
-  return `# Token discipline (lean mod)\n${lines.join('\n')}`
+  return `# Token discipline (${MOD})\n${lines.join('\n')}`
 }
 
 // Stream rules (omp's time-traveling stream rules): when Claude's reply breaks one, the reply stops
@@ -147,13 +149,15 @@ export const register: Register = (on, options) => {
   let hashOn = true
   let cwd = ''
   let rules: LoadedRule[] = []
+  const routing = routingFrom(options)
+  const route = newRoute()
 
   on('session.start', async ($, e, next) => {
     hashOn = ((await $.store.get('hashline')) ?? true) === true
     cwd = e.cwd
 
-    // Your rules file, then the project's own .claude/lean-rules.json.
-    const files = [rulesFile, `${cwd.replace(/\/$/, '')}/.claude/lean-rules.json`].filter(Boolean)
+    // Your rules file, then the project's own .claude/token-optimiser-rules.json.
+    const files = [rulesFile, `${cwd.replace(/\/$/, '')}/.claude/${MOD}-rules.json`].filter(Boolean)
     rules = []
     for (const f of files) {
       const text = await $.fs.read(f).catch(() => undefined)
@@ -161,8 +165,8 @@ export const register: Register = (on, options) => {
     }
 
     await $.command.register({
-      name: 'lean',
-      description: 'Token report for this session and the hashline A/B',
+      name: 'tokens',
+      description: 'Token report for this session: routing, savings and the hashline A/B',
       argumentHint: '[hashline on|off]',
     })
 
@@ -221,7 +225,7 @@ export const register: Register = (on, options) => {
     if (rules.some(r => r.stream === true)) {
       await $.tool.register({
         name: 'Rule',
-        description: 'Used by the lean mod to hand you a rule when your reply breaks one. Never call it yourself.',
+        description: `Used by the ${MOD} mod to hand you a rule when your reply breaks one. Never call it yourself.`,
         inputSchema: { type: 'object', properties: { rule: { type: 'string' } }, required: ['rule'] },
         isDeferred: false,
       })
@@ -240,7 +244,7 @@ export const register: Register = (on, options) => {
     const text = guide(e.tools)
     return text === undefined
       ? composed
-      : { sections: [...composed.sections, { id: 'lean:guide', text, scope: 'session' }] }
+      : { sections: [...composed.sections, { id: `${MOD}:guide`, text, scope: 'session' }] }
   })
 
   // Bash: the protected-branch guard, then trimming. (Claude Code builds with mods have no Grep tool; Bash grep is trimmed here.)
@@ -248,7 +252,7 @@ export const register: Register = (on, options) => {
     if (pushesBranch(e.command, branch, cwd)) {
       await bump($, s => ({ ...s, guards: s.guards + 1 }))
       return {
-        deny: `lean: pushes to ${branch} are protected in this setup${pushNote ? ` (${pushNote})` : ''}. Push to another branch instead. If the person asked for this push in this conversation, prefix the command with LEAN_ALLOW_PUSH=1.`,
+        deny: `${MOD}: pushes to ${branch} are protected in this setup${pushNote ? ` (${pushNote})` : ''}. Push to another branch instead. If the person asked for this push in this conversation, prefix the command with ${ALLOW_PUSH}.`,
       }
     }
     const ran = await next(e)
@@ -270,7 +274,7 @@ export const register: Register = (on, options) => {
 
   // No single-file bind mounts of checkout files in the guarded compose folder.
   const mountDeny = (found: string[]) => ({
-    deny: `lean: ${found.join(', ')} would be a single-file bind mount. When git replaces the file (a reset, a checkout, a pull) the container keeps the old inode and stops seeing changes. Mount the directory instead. If it really must be one file, end that line with "# lean: file-mount-ok".`,
+    deny: `${MOD}: ${found.join(', ')} would be a single-file bind mount. When git replaces the file (a reset, a checkout, a pull) the container keeps the old inode and stops seeing changes. Mount the directory instead. If it really must be one file, end that line with "# ${MOUNT_OK}".`,
   })
 
   on('tool.call', { tool: 'Edit' }, async ($, e, next) => {
@@ -279,7 +283,7 @@ export const register: Register = (on, options) => {
     if (found.length === 0) return next(e)
     await bump($, s => ({ ...s, guards: s.guards + 1 }))
     return mountDeny(found)
-  }).catch(($, e, next) => (next.called ? next(e) : { deny: 'lean: its compose guard failed' }))
+  }).catch(($, e, next) => (next.called ? next(e) : { deny: `${MOD}: its compose guard failed` }))
 
   on('tool.call', { tool: 'Write' }, async ($, e, next) => {
     if (!isGuardedYaml(e.file_path, mountPath)) return next(e)
@@ -288,7 +292,7 @@ export const register: Register = (on, options) => {
     if (found.length === 0) return next(e)
     await bump($, s => ({ ...s, guards: s.guards + 1 }))
     return mountDeny(found)
-  }).catch(($, e, next) => (next.called ? next(e) : { deny: 'lean: its compose guard failed' }))
+  }).catch(($, e, next) => (next.called ? next(e) : { deny: `${MOD}: its compose guard failed` }))
 
   // Pattern rules (omp's TTSR, at the tool call): a match blocks the call, or runs it and hands the rule along.
   on('tool.call', async ($, e, next) => {
@@ -301,7 +305,7 @@ export const register: Register = (on, options) => {
     const ran = await next(e)
     if (ran.deny !== undefined || ran.isError === true) return ran
     return { ...ran, context: [...(ran.context ?? []), ...hits.map(ruleNote)] }
-  }).catch(($, e, next) => (next.called ? next(e) : { deny: 'lean: its rule check failed' }))
+  }).catch(($, e, next) => (next.called ? next(e) : { deny: `${MOD}: its rule check failed` }))
 
   // Diagnostics after a write: the checker's errors arrive with the tool's result.
   if (checks) {
@@ -378,35 +382,49 @@ export const register: Register = (on, options) => {
     }
   })
 
-  // One turn.step hook: stream rules, then the advisor's log of what the main loop did.
+  // One turn.start hook: the person's prompt, kept for the router's first step and for the advisor.
+  on('turn.start', async ($, e, next) => {
+    if (e.agentId === undefined && e.text !== '') {
+      route.prompt = e.text
+      request = e.text
+      log = []
+    }
+    return next(e)
+  })
+
+  // An Agent call that names no model gets its type's.
+  if (routing) {
+    on('tool.call', { tool: 'Agent' }, async ($, e, next) => {
+      if (e.model !== undefined) return next(e)
+      const model = await agentModel($, e.subagent_type, route, routing)
+      return next(model === undefined ? e : { ...e, model })
+    }).catch(($, e, next) => next(e))
+  }
+
+  // One turn.step hook: the main loop's model, stream rules, then the advisor's log of what the main loop did.
   on('turn.step', async function* ($, e, next) {
-    const r = yield* ruledStep($, e, next, rules, fired)
-    if (advisorModel !== '' && e.agentId === undefined && r) {
-      if (r.answer) log.push(`agent: ${r.answer}`)
-      for (const t of r.toolUses) log.push(`tool ${t.name}: ${JSON.stringify(t.input).slice(0, 400)}`)
+    const step = routing && e.agentId === undefined ? { ...e, model: await mainModel($, e, route, routing).catch(() => e.model) } : e
+    const r = yield* ruledStep($, step, next, rules, fired)
+    if (e.agentId === undefined && r) {
+      if (r.answer) route.reply = r.answer
+      if (advisorModel !== '') {
+        if (r.answer) log.push(`agent: ${r.answer}`)
+        for (const t of r.toolUses) log.push(`tool ${t.name}: ${JSON.stringify(t.input).slice(0, 400)}`)
+      }
     }
     return r
   })
-
 
   on('tool.check', { tool: RULE_TOOL }, () => ({ decision: 'allow' }))
 
   on('tool.call', { tool: RULE_TOOL }, async ($, e) => {
     const { rule } = e as unknown as { rule?: string }
-    return { result: `${rule ?? 'lean rule'}\nYour reply was cut where it broke this rule. Carry on from there, following it.` }
+    return { result: `${rule ?? `${MOD} rule`}\nYour reply was cut where it broke this rule. Carry on from there, following it.` }
   })
 
   // The advisor (omp's advisor role): a second model reads each finished turn of the main loop and,
   // for a concern or a blocker, hands the agent its note and keeps it going. Off unless advisorModel is set.
   if (advisorModel !== '') {
-    on('turn.start', async ($, e, next) => {
-      if (e.agentId === undefined && e.text !== '') {
-        request = e.text
-        log = []
-      }
-      return next(e)
-    })
-
     on('classic.Stop', async ($, e, next) => {
       const done = await next(e)
       if (done.block !== undefined || e.stop_hook_active || request === '' || log.length === 0) return done
@@ -445,21 +463,21 @@ export const register: Register = (on, options) => {
     return done
   })
 
-  on('command.run', { command: 'lean' }, async ($, e) => {
+  on('command.run', { command: 'tokens' }, async ($, e) => {
     const [what, value] = e.args.trim().split(/\s+/)
     if (what === 'hashline') {
-      if (value !== 'on' && value !== 'off') return { text: 'Usage: /lean hashline on|off' }
+      if (value !== 'on' && value !== 'off') return { text: 'Usage: /tokens hashline on|off' }
       await $.store.set('hashline', value === 'on')
       return { text: `hashline ${value} from the next session (this one stays ${hashOn ? 'on' : 'off'}).` }
     }
-    return { text: await report($, hashOn) }
+    return { text: await report($, hashOn, routeLine(route, routing)) }
   })
 }
 
 const k = (n: number) => (n >= 10_000 ? `${Math.round(n / 1000)}k` : String(n))
 const perTurn = (t: Tally) => (t.turns === 0 ? '-' : k(Math.round(t.output / t.turns)))
 
-const report = async ($: EngineInterface, hashOn: boolean): Promise<string> => {
+const report = async ($: EngineInterface, hashOn: boolean, routing: string): Promise<string> => {
   const s = await read($, stats)
   const usage = await $.session.usage().catch(() => undefined)
   const life = ((await $.store.get('lifetime')) ?? {}) as Partial<Lifetime>
@@ -467,10 +485,11 @@ const report = async ($: EngineInterface, hashOn: boolean): Promise<string> => {
     t ? `  ${name}: ${t.sessions} sessions, ${t.turns} turns, ${perTurn(t)} output tokens per turn` : `  ${name}: no data yet`
 
   return [
-    `lean, this session (hashline ${hashOn ? 'on' : 'off'})`,
+    `${MOD}, this session (hashline ${hashOn ? 'on' : 'off'})`,
     `  main loop: ${s.main.turns} turns, output ${k(s.main.output)} (${perTurn(s.main)}/turn), input ${k(s.main.input)}, cache read ${k(s.main.cacheRead)}, cache write ${k(s.main.cacheWrite)}`,
     `  subagents: ${s.sub.turns} turns, output ${k(s.sub.output)}, input ${k(s.sub.input + s.sub.cacheRead + s.sub.cacheWrite)}`,
     usage?.cost ? `  cost so far: $${usage.cost.usd.toFixed(2)}${usage.context.percent !== undefined ? `, context ${usage.context.percent}% full` : ''}` : '',
+    routing,
     'savings (estimated at 4 chars per token)',
     `  trimmed outputs: ${s.trims}, about ${k(Math.round(s.charsCut / 4))} tokens kept out of context`,
     `  hashline: ${s.hashReads} reads, ${s.hashEdits} edits (${s.hashEditFails} failed), about ${k(Math.round(s.editCharsSaved / 4))} output tokens not typed`,
@@ -478,6 +497,6 @@ const report = async ($: EngineInterface, hashOn: boolean): Promise<string> => {
     'hashline A/B, all sessions (main loop)',
     row('on ', life.on),
     row('off', life.off),
-    'Switch with /lean hashline on|off (applies from the next session).',
+    'Switch with /tokens hashline on|off (applies from the next session).',
   ].filter(Boolean).join('\n')
 }

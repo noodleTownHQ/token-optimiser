@@ -1,0 +1,14 @@
+{
+  "name": "token-optimiser",
+  "version": "0.5.0",
+  "description": "Spend fewer tokens for the same work in omp and Claude Code: the model follows the job, and tool output stays small",
+  "license": "MIT",
+  "repository": "github:noodleTownHQ/token-optimiser",
+  "type": "module",
+  "omp": {
+    "extensions": ["./omp/router.ts"]
+  },
+  "scripts": {
+    "test": "bun test core omp && claude plugin test ."
+  }
+}

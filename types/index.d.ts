@@ -20,6 +20,6 @@ export type SessionStats = {
 
 declare module 'claude-code' {
   interface PluginState {
-    lean: { stats: SessionStats }
+    'token-optimiser': { stats: SessionStats }
   }
 }
