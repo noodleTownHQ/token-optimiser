@@ -167,13 +167,14 @@ The main-loop models must be full ids; the engine refuses an alias such as `haik
 | interim | 738 | 9,857 | $513.49 | 0.64 |
 | after | 5 | 23 | $1.85 | 0.38 |
 
-Billed is omp's own figure at API list prices, whatever the login pays. The windows hold different work (`before` is mostly long unattended runs), so this is not a controlled comparison, and `after` is too short to say anything yet: rerun it in a couple of weeks.
+Billed is omp's own figure at API list prices, whatever the login pays. The windows hold different work (`before` is mostly long unattended runs), so this is not a controlled comparison, and `after` is too short to say anything yet: rerun it in a couple of weeks. `bun omp/cost.ts --snapshot` keeps each reading in [`findings/cost.jsonl`](findings/cost.jsonl), and [`FINDINGS.md`](FINDINGS.md) is the dated log of what was measured.
 
 ## Layout
 
 ```
 core/    the routing rules: pure functions, no host code
 omp/     the omp extension; replay.ts prices the rule on your sessions, cost.ts reports cost by window
+findings/ cost.jsonl, one line per `cost.ts --snapshot`; FINDINGS.md at the root quotes them
 hooks/   the Claude Code mod
 tests/   Claude Code tests (claude plugin test)
 ```

@@ -1,6 +1,6 @@
 // What your omp sessions cost, by window, for a before/after comparison of the router.
 //
-//   bun omp/cost.ts [--dir ~/.omp/agent/sessions]
+//   bun omp/cost.ts [--dir ~/.omp/agent/sessions] [--snapshot]
 //
 // Prints each window below: requests, turns, what omp billed (its own figure, at API list prices, whatever the login pays),
 // the cost per turn and per request, the median context a request carried, the share of cost by model, and a price index.
@@ -17,6 +17,11 @@
 // Not a controlled comparison: the work differs from window to window (the `before` window is mostly long unattended runs,
 // which is why it has so few turns), so compare the index, not the cost per turn, and let the windows grow before drawing a
 // conclusion. It reads only this machine's sessions.
+//
+// --snapshot also appends one line (the date and each window's figures) to findings/cost.jsonl, so the history of the `after`
+// window is kept in the repository and FINDINGS.md can quote it.
+import { appendFileSync } from 'node:fs'
+
 import { SESSIONS_DIR, sessionFiles, sessionTurns } from './sessions'
 import type { Turn } from './sessions'
 
@@ -78,8 +83,8 @@ if (import.meta.main) {
   const at = process.argv.indexOf('--dir')
   const dir = at > 0 && process.argv[at + 1] ? process.argv[at + 1]! : SESSIONS_DIR
   const turns = sessionFiles(dir, Date.parse(WINDOWS[0]!.from), Infinity).flatMap(sessionTurns)
-  for (const w of WINDOWS) {
-    const s = summarise(turns, Date.parse(w.from), Date.parse(w.to))
+  const rows = WINDOWS.map(w => ({ w, s: summarise(turns, Date.parse(w.from), Date.parse(w.to)) }))
+  for (const { w, s } of rows) {
     const shares = Object.entries(s.share)
       .sort((a, b) => b[1] - a[1])
       .map(([model, x]) => `${model.replace('claude-', '')} ${(x * 100).toFixed(0)}%`)
@@ -89,5 +94,10 @@ if (import.meta.main) {
     console.log(`  $${s.perTurn.toFixed(3)} per turn, $${s.perRequest.toFixed(4)} per request, median context ${Math.round(s.medianContext / 1000)}k tokens`)
     console.log(`  price index ${s.index.toFixed(2)} (1.00 = every token on Opus 5.5)`)
     console.log(`  by model: ${shares || 'none'}`)
+  }
+  if (process.argv.includes('--snapshot')) {
+    const line = JSON.stringify({ at: new Date().toISOString(), windows: rows.map(({ w, s }) => ({ name: w.name, ...s })) })
+    appendFileSync(new URL('../findings/cost.jsonl', import.meta.url), line + '\n')
+    console.log('appended to findings/cost.jsonl')
   }
 }
