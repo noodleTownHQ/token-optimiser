@@ -44,9 +44,10 @@ Every decision follows the same steps, and each one is written down (see [Seeing
 
 1. **Read the prompt.** The light model (Haiku 5.5 by default) is shown the prompt and the end of the assistant's last reply, and answers with one word: `light`, `standard` or `heavy`. The last reply is there so that "yes, do it" takes the tier of the work that was proposed. If the call fails or takes more than 5 seconds, a fixed set of rules (keywords, length, number of files named) reads the prompt instead.
 2. **Apply the quota guard.** On a plan login, once 70% of the 7-day limit is used, heavy work runs on the standard model; from 90% everything runs on the light model. On an API key there is no limit to read and nothing is held.
-3. **Move, or stay.** The loop moves when the tier differs from the one it is on: down as well as up, at any context size. The choice holds until a later prompt changes it.
+3. **Fit the window** (omp). A move to a lower tier is raised to the nearest tier whose context window holds the session within 80%, using the windows omp reports for each model. A model that cannot hold the session cannot answer, so this outranks the quota guard. Claude Code does not do this step.
+4. **Move, or stay.** The loop moves when the tier differs from the one it is on: down as well as up, at any context size the window allows. The choice holds until a later prompt changes it.
 
-Only step 1 is a model's judgement. Steps 2 and 3 are plain functions in [`core/router.ts`](core/router.ts): the same inputs always give the same decision.
+Only step 1 is a model's judgement. Steps 2 to 4 are plain functions in [`core/router.ts`](core/router.ts): the same inputs always give the same decision.
 
 ### Why it moves down in a long session
 
@@ -135,13 +136,7 @@ To try it for one run: `omp -e ~/src/token-optimiser/omp/router.ts`.
 
 Settings are optional. Copy [`examples/omp-config.json`](examples/omp-config.json) to `~/.omp/agent/token-optimiser.json` and edit it; the file is read on every prompt, so a change applies at once.
 
-If `omp models list` shows your light model with a smaller context window than the others, omp compacts the conversation whenever the router moves to it above that size. Give it the limit your other models have, for example:
-
-```
-omp config set compaction.modelThresholds '{"anthropic/claude-haiku-5-5":250000}'
-```
-
-omp 19.1 lists Haiku 5.5 with the same 1M window as Sonnet and Opus, and needs no such setting.
+omp cuts a model that has a long-context price tier (Haiku 5.5, above 100,000 tokens) to that threshold while its `extendedContext` setting is off, which is the default, so the light model can show a 100K window in `omp models list`. The router will not move a session to a model that cannot hold it (see step 3 above), so a long session stays on Sonnet instead. To keep the light model at its full window, set `extendedContext: true` in omp; above the threshold the provider's long-context price applies.
 
 ## Settings
 
@@ -207,7 +202,7 @@ The main-loop models must be full ids; the engine refuses an alias such as `haik
 - Savings shown by `/tokens` for trimmed output are estimates (4 characters per token).
 - Claude Code reports the session model's context window whichever model a request runs on.
 - On an API key the quota guard does nothing: there is no 7-day limit to read.
-- In omp, a light model that the catalog lists with a smaller window than the others triggers compaction on a move to it above that size; see [Install](#omp).
+- In omp, a light model whose window is cut below the session's size (omp's `extendedContext` is off by default) is skipped: the router raises the tier until the session fits within 80% of the window. If no tier fits, compaction decides.
 - The MCP trim counts a tool as called only from session files still on disk. Delete those, and a tool's past calls are forgotten except for what the evidence file already recorded.
 - A tool switched off by the MCP trim comes back from the next session, not the running one.
 - No before-and-after cost figure is published yet: the `after` window below has 5 turns.

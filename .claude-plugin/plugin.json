@@ -13,7 +13,7 @@
     "route": {
       "type": "boolean",
       "title": "Route models by the job",
-      "description": "Choose the main loop's model from each prompt (read by the light model, by rules when that fails) and each subagent's model from its type. A model you pick with /model is left alone for the rest of the session",
+      "description": "Choose the main loop's model from each prompt (read by the light model, by rules when that fails) and each subagent's model from its type. A model you pick with /model is left alone for the next few prompts (see handPickPrompts), then routing resumes",
       "default": true
     },
     "lightModel": {
