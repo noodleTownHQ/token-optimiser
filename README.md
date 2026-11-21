@@ -60,7 +60,7 @@ Run it on your own sessions: `bun omp/replay.ts` (options `--days`, `--until`, `
 
 This is an estimate, not a bill. The replay read the prompts with the fixed rules, which call most turns `standard`, and it assumes the cheaper model makes the same requests and writes the same output.
 
-A model you pick by hand (`/model`) is left alone for the rest of the session.
+A model you pick by hand (`/model`) is left alone for the next 5 prompts, and a line says so. Then routing resumes: a session left on a strong model pays that model's price on every later prompt, whatever the prompt needs. Picking again starts the count again. The number is yours to set (`handPickPrompts` in Claude Code, `pickHold` in omp).
 
 **Subagents** start with an empty context, so their model costs no cache to choose. Each agent type has a tier (Claude Code: `Explore` light, `general-purpose` standard, `Plan` heavy; omp: `scout`, `explore`, `sonic` light, `task` standard, `reviewer`, `security-reviewer`, `plan` heavy). A type not in the table, and a call that names its own model, are left alone. You can replace the table.
 
@@ -157,6 +157,7 @@ Set in the config menu (`/config`), or in `~/.claude/settings.json` under `plugi
 | `heavyModel` | `claude-opus-5-5` | Model for design and root-cause work |
 | `holdHeavyAtPercent` | `70` | Share of the 7-day limit from which heavy work runs on the standard model |
 | `lightOnlyAtPercent` | `90` | Share of the 7-day limit from which everything runs on the light model |
+| `handPickPrompts` | `5` | Prompts a model you picked with `/model` is left alone before routing resumes |
 | `subagentTiers` | built-in table | JSON object of agent type to `light`, `standard` or `heavy` |
 | `trimChars` | `10000` | Output longer than this is trimmed |
 | `diagnostics` | `true` | Run a checker after each edit |
@@ -178,6 +179,7 @@ The main-loop models must be full ids; the engine refuses an alias such as `haik
 | `tiers` | Haiku 5.5, Sonnet 5.5, Opus 5.5 | Tier to model, as `provider/id` |
 | `quotaGuard` | `{ "enabled": true, "holdHeavyAt": 0.7, "lightOnlyAt": 0.9 }` | As above, as fractions |
 | `subagents` | built-in table | Agent type to tier; replaces the table |
+| `pickHold` | `5` | Prompts a model you picked with `/model` is left alone before routing resumes |
 | `mcp` | `{ "trim": "auto", "keep": [], "prompts": 10, "minSessions": 2, "sessions": 5 }` | [Unused MCP tools](#unused-mcp-tools-omp). `trim` is `auto`, `propose` or `off`; `keep` names servers or tools never switched off; the three numbers are the evidence a tool needs |
 | `mcpHints` | `{}` | MCP server to a pattern. When a prompt matches and the whole server is switched off in omp's `mcp.json`, you are told once how to turn it on |
 

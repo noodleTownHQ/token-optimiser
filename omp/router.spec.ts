@@ -69,3 +69,12 @@ describe('parseMcpState', () => {
     })
   })
 })
+
+describe('pickHold', () => {
+  test('a whole number of prompts from nought up is taken; anything else keeps the default', () => {
+    expect(mergeConfig({ pickHold: 0 }).pickHold).toBe(0)
+    expect(mergeConfig({ pickHold: 12 }).pickHold).toBe(12)
+    expect(mergeConfig({ pickHold: -1 }).pickHold).toBe(DEFAULT_CONFIG.pickHold)
+    expect(mergeConfig({ pickHold: '3' }).pickHold).toBe(DEFAULT_CONFIG.pickHold)
+  })
+})

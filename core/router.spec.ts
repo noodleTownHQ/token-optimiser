@@ -1,11 +1,12 @@
 // Run with `bun test core omp`. Named .spec.ts so `claude plugin test`, which takes every *.test.ts, leaves it to bun.
 import { describe, expect, test } from 'bun:test'
 
-import { DEFAULT_GUARD, classifierPrompt, classify, decide, guardedTier, parseSubagents, parseTier, subagentTier, tierOf } from './router'
+import { DEFAULT_GUARD, DEFAULT_PICK_HOLD, classifierPrompt, classify, decide, guardedTier, parseSubagents, parseTier, pickStep, subagentTier, tierOf } from './router'
 import type { Policy } from './router'
 
 const POLICY: Policy = {
   quotaGuard: DEFAULT_GUARD,
+  pickHold: DEFAULT_PICK_HOLD,
   subagents: { scout: 'light', task: 'standard', 'egm-design': 'heavy' },
 }
 
@@ -106,5 +107,26 @@ describe('parseSubagents', () => {
     expect(parseSubagents('not json')).toBeUndefined()
     expect(parseSubagents(['light'])).toBeUndefined()
     expect(parseSubagents(undefined)).toBeUndefined()
+  })
+})
+
+describe('pickStep', () => {
+  test('with no pick, every prompt is routed', () => {
+    expect(pickStep(0, false, 5)).toEqual({ held: 0, route: true })
+  })
+  test('a pick is left alone for the hold, then routing resumes', () => {
+    let held = 0
+    const routed = [true, false, false, false].map(picked => {
+      const step = pickStep(held, picked, 3)
+      held = step.held
+      return step.route
+    })
+    expect([...routed, pickStep(held, false, 3).route]).toEqual([false, false, false, true, true])
+  })
+  test('a second pick during the hold starts the count again', () => {
+    expect(pickStep(1, true, 3)).toEqual({ held: 2, route: false })
+  })
+  test('a hold of nothing routes the very next prompt', () => {
+    expect(pickStep(0, true, 0)).toEqual({ held: 0, route: true })
   })
 })

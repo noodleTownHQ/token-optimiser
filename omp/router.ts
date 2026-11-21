@@ -2,8 +2,8 @@
 //
 //   1. Subagents (before_subagent_spawn): each agent type has a tier, and a child that names no model gets that tier's.
 //   2. Main loop (before_agent_start): the light model reads the prompt (the core's rules when it cannot) and the model
-//      follows, down as well as up, at any context size. A model the person picks by hand (/model) is never touched
-//      again in that session.
+//      follows, down as well as up, at any context size. A model the person picks by hand (/model) is left alone for
+//      `pickHold` prompts, then routing resumes.
 //   3. Quota guard: as the 7-day Claude quota (`omp usage`) runs out, heavy work drops to the standard model, then all of it to light.
 //   4. MCP tool load (../core/mcp.ts): every connected tool is listed in every request. At a session's first prompt the tools
 //      that earlier sessions loaded and never called are switched off for the session, and one line says so.
@@ -18,7 +18,7 @@ import * as path from 'node:path'
 
 import { DEFAULT_MCP, emptyState, listServer, modelNote, planTrim, recordPrompt, report, restore, summary } from '../core/mcp'
 import type { McpPolicy, McpState, ToolInfo } from '../core/mcp'
-import { CLASSIFIER_SYSTEM, DEFAULT_GUARD, TIERS, classifierPrompt, classify, decide, isRecord, parseSubagents, parseTier, subagentTier, tierOf } from '../core/router'
+import { CLASSIFIER_SYSTEM, DEFAULT_GUARD, DEFAULT_PICK_HOLD, TIERS, classifierPrompt, classify, decide, isRecord, parseSubagents, parseTier, pickStep, subagentTier, tierOf } from '../core/router'
 import type { Policy, Tier } from '../core/router'
 import { readUsage } from './usage'
 
@@ -53,6 +53,7 @@ export const DEFAULT_CONFIG: RouterConfig = {
     'security-reviewer': 'heavy',
     plan: 'heavy',
   },
+  pickHold: DEFAULT_PICK_HOLD,
   mcpHints: {},
   mcp: DEFAULT_MCP,
 }
@@ -60,6 +61,7 @@ export const DEFAULT_CONFIG: RouterConfig = {
 /** A person's JSON over the defaults; anything of the wrong shape is ignored. A `subagents` table replaces the default one. */
 export function mergeConfig(raw: unknown): RouterConfig {
   const out = structuredClone(DEFAULT_CONFIG)
+  if (isRecord(raw) && Number.isInteger(raw.pickHold) && (raw.pickHold as number) >= 0) out.pickHold = raw.pickHold as number
   if (!isRecord(raw)) return out
   if (typeof raw.enabled === 'boolean') out.enabled = raw.enabled
   if (isRecord(raw.tiers)) {
@@ -186,9 +188,10 @@ export function textOf(message: unknown): string {
 // ---------------------------------------------------------------- extension
 
 interface Session {
-  /** The model the router last set; anything else found in its place is the person's own choice. */
-  lastSet?: string
-  handsOff: boolean
+  /** The model in place when the router last finished with a prompt; another one found there is the person's own choice. */
+  seen?: string
+  /** Prompts for which the person's own model is still left alone. */
+  held: number
   /** The main loop's last answer: what a follow-up such as "yes, do it" refers to. */
   reply: string
   /** MCP servers this session has been told about. */
@@ -331,7 +334,7 @@ export default function (pi: ExtensionAPI) {
     const cfg = mergeConfig(readJson(CONFIG_PATH))
     if (!cfg.enabled) return
     const id = ctx.sessionManager.getSessionId()
-    const s = sessions.get(id) ?? { handsOff: false, reply: '', told: new Set<string>() }
+    const s = sessions.get(id) ?? { held: 0, reply: '', told: new Set<string>() }
     sessions.set(id, s)
 
     try {
@@ -349,8 +352,15 @@ export default function (pi: ExtensionAPI) {
 
     const now = ctx.models.current()
     const current = now ? `${now.provider}/${now.id}` : undefined
-    if (s.lastSet && current && current !== s.lastSet) s.handsOff = true
-    if (s.handsOff) return extra
+    const picked = s.seen !== undefined && current !== undefined && current !== s.seen
+    const pick = pickStep(s.held, picked, cfg.pickHold)
+    s.held = pick.held
+    s.seen = current
+    if (!pick.route) {
+      if (picked) ctx.ui.notify(`token-optimiser: ${current?.split('/').pop()} is your pick; left alone for ${cfg.pickHold} prompts, then routing resumes`, 'info')
+      log({ event: 'main', model: current, tokens: ctx.getContextUsage()?.tokens ?? 0, action: 'left alone', why: 'picked by hand', promptsLeft: pick.held })
+      return extra
+    }
 
     void refreshQuota()
     const state = { quotaUsed: quota.used, current: tierOf(current, cfg.tiers) }
@@ -372,7 +382,7 @@ export default function (pi: ExtensionAPI) {
     }
     const ok = await pi.setModel(model)
     if (ok) {
-      s.lastSet = target
+      s.seen = target
       ctx.ui.notify(`token-optimiser: ${target.split('/').pop()} (${why})`, 'info')
     }
     log({ ...decided, action: ok ? 'switch' : 'setModel refused' })

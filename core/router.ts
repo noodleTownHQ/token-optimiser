@@ -24,9 +24,12 @@ export interface Policy {
   quotaGuard: QuotaGuard
   /** Agent type -> tier. An agent not listed keeps the model it would have had. */
   subagents: Record<string, Tier>
+  /** Prompts for which a model the person picked by hand is left alone; routing resumes after them. */
+  pickHold: number
 }
 
 export const DEFAULT_GUARD: QuotaGuard = { enabled: true, holdHeavyAt: 0.7, lightOnlyAt: 0.9 }
+export const DEFAULT_PICK_HOLD = 5
 
 // ---------------------------------------------------------------- how hard is the prompt, by rules
 
@@ -159,6 +162,17 @@ export function decide(wanted: Tier, now: Reading, policy: Policy): Decision {
   const asks = tier === wanted ? `${wanted} work` : `${wanted} work, held to ${tier} by the quota guard`
   if (tier === now.current) return { tier, action: 'keep', why: `${asks}: already on the ${tier} model` }
   return { tier, action: 'switch', why: `${asks}: moved to the ${tier} model` }
+}
+
+/**
+ * One prompt of a hand pick. `held` is how many prompts were still to be left alone before this one, and `picked` says the
+ * person changed the model since the last prompt, which starts the count again. A prompt that is not routed keeps the
+ * person's model. A pick is honoured, then routing resumes: a session left on a strong model spends at its price on every
+ * later prompt, whatever the prompt needs.
+ */
+export function pickStep(held: number, picked: boolean, hold: number): { held: number; route: boolean } {
+  const left = picked ? hold : held
+  return left > 0 ? { held: left - 1, route: false } : { held: 0, route: true }
 }
 
 /**

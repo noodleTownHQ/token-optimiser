@@ -2,6 +2,12 @@
 
 A dated log of what was measured and what changed because of it. Newest first. Raw cost snapshots are in [`findings/cost.jsonl`](findings/cost.jsonl) (`bun omp/cost.ts --snapshot`); the replay figures come from `bun omp/replay.ts`. Everything here is from one install (the author's), so treat it as one data point.
 
+## 21 Nov 2026: a hand-picked model is held, not kept for the session (0.8.0)
+
+Observed on a long session: the person picked a strong model by hand for one piece of work, and every later prompt of the session ran on it, the short follow-ups included, because a hand pick stopped routing until the session ended. Nothing in the log said so.
+
+What changed: a pick is left alone for 5 prompts (`pickHold`, `handPickPrompts`), one line says so, each held prompt is logged as `left alone`, and then routing resumes. Five is a judgement, not a measurement: long enough for the piece of work the pick was for, short enough that a forgotten pick stops costing.
+
 ## 21 Nov 2026: unused MCP tools switched off (0.7.0)
 
 One install, omp 19.1.0, three MCP servers offering 869 tools. Input tokens of a session's first request (`reply with the single word ok`):

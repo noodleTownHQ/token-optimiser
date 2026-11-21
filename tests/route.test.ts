@@ -98,17 +98,28 @@ describe('routing the main loop', () => {
     expect(JSON.stringify(await $.command.run({ command: 'tokens', args: '' }))).toContain('3 switches')
   })
 
-  test('a model picked by hand ends routing for the session', async ($, on) => {
+  test('a model picked by hand is left alone for the hold, then routing resumes', { options: { handPickPrompts: 2 } }, async ($, on) => {
     const s = session(on)
+    const FABLE = { ...STEP, model: 'claude-fable-5-2' }
+    await $.session.start(START)
+    await $.turn.start({ text: LOOKUP, turnId: 't1' })
+    await finish($.turn.step(STEP))
+    for (const turnId of ['t2', 't3', 't4']) {
+      await $.turn.start({ text: LOOKUP, turnId })
+      await finish($.turn.step(FABLE))
+    }
+    expect(s.requests).toEqual(['claude-haiku-5-5', 'claude-fable-5-2', 'claude-fable-5-2', 'claude-haiku-5-5'])
+    expect(s.asked).toHaveLength(2)
+  })
+
+  test('while a pick is held, /tokens says when routing resumes', async ($, on) => {
+    session(on)
     await $.session.start(START)
     await $.turn.start({ text: LOOKUP, turnId: 't1' })
     await finish($.turn.step(STEP))
     await $.turn.start({ text: LOOKUP, turnId: 't2' })
     await finish($.turn.step({ ...STEP, model: 'claude-fable-5-2' }))
-    await $.turn.start({ text: LOOKUP, turnId: 't3' })
-    await finish($.turn.step({ ...STEP, model: 'claude-fable-5-2' }))
-    expect(s.requests).toEqual(['claude-haiku-5-5', 'claude-fable-5-2', 'claude-fable-5-2'])
-    expect(s.asked).toHaveLength(1)
+    expect(JSON.stringify(await $.command.run({ command: 'tokens', args: '' }))).toContain('left on the model you picked; routing resumes after 4 more prompts')
   })
 
   test('the quota guard holds heavy work to the standard model', async ($, on) => {

@@ -7,7 +7,7 @@
 //   Quota: the engine reports the share of the 7-day limit used on a plan login; on an API key there is none, so nothing is held.
 import type { EngineInterface, TurnStepInput } from 'claude-code'
 
-import { CLASSIFIER_SYSTEM, DEFAULT_GUARD, classifierPrompt, classify, decide, parseSubagents, parseTier, subagentTier, tierOf } from '../core/router'
+import { CLASSIFIER_SYSTEM, DEFAULT_GUARD, DEFAULT_PICK_HOLD, classifierPrompt, classify, decide, parseSubagents, parseTier, pickStep, subagentTier, tierOf } from '../core/router'
 import type { Policy, Tier } from '../core/router'
 
 export interface Routing extends Policy {
@@ -31,15 +31,17 @@ export interface Route {
   tier?: Tier
   /** The session's model, as the engine last offered it. */
   offered?: string
-  /** Set once the person changes model by hand: the router leaves the main loop alone from then on. */
-  handsOff: boolean
+  /** Set when the person changes model by hand, until the next prompt has counted it. */
+  picked: boolean
+  /** Prompts for which the person's own model is still left alone. */
+  held: number
   /** What the router did with the last prompt, and why. */
   last?: string
   switches: number
   subagents: number
 }
 
-export const newRoute = (): Route => ({ prompt: '', reply: '', handsOff: false, switches: 0, subagents: 0 })
+export const newRoute = (): Route => ({ prompt: '', reply: '', picked: false, held: 0, switches: 0, subagents: 0 })
 
 /** The routing a person's options ask for; undefined when routing is switched off. */
 export function routingFrom(options: Readonly<Record<string, unknown>>): Routing | undefined {
@@ -58,6 +60,7 @@ export function routingFrom(options: Readonly<Record<string, unknown>>): Routing
       lightOnlyAt: positive('lightOnlyAtPercent', DEFAULT_GUARD.lightOnlyAt * 100) / 100,
     },
     subagents: parseSubagents(options.subagentTiers) ?? SUBAGENTS,
+    pickHold: Number.isInteger(Number(options.handPickPrompts)) && Number(options.handPickPrompts) >= 0 ? Number(options.handPickPrompts) : DEFAULT_PICK_HOLD,
   }
 }
 
@@ -83,15 +86,25 @@ async function asked($: EngineInterface, model: string, prompt: string, reply: s
 
 /** The model for one request of the main loop. */
 export async function mainModel($: EngineInterface, e: TurnStepInput, r: Route, cfg: Routing): Promise<string> {
-  // The engine offers the session's model on every step. A different one is the person's /model: theirs to keep.
-  if (r.offered !== undefined && e.model !== r.offered) r.handsOff = true
+  // The engine offers the session's model on every step. A different one is the person's /model: theirs for `pickHold` prompts.
+  if (r.offered !== undefined && e.model !== r.offered) {
+    r.picked = true
+    r.tier = undefined
+  }
   r.offered = e.model
-  if (r.handsOff) return e.model
 
   const current = r.tier ? cfg.models[r.tier] : e.model
   const prompt = r.prompt
   r.prompt = ''
   if (prompt === '') return current
+
+  const pick = pickStep(r.held, r.picked, cfg.pickHold)
+  r.picked = false
+  r.held = pick.held
+  if (!pick.route) {
+    r.last = `left on the model you picked; routing resumes ${pick.held ? `after ${pick.held} more ${pick.held === 1 ? 'prompt' : 'prompts'}` : 'at the next prompt'}`
+    return e.model
+  }
 
   const now = { quotaUsed: await quotaUsed($), current: r.tier ?? tierOf(e.model, cfg.models) }
   const read = await asked($, cfg.models.light, prompt, r.reply)
@@ -115,7 +128,7 @@ export async function agentModel($: EngineInterface, agent: string | undefined, 
 /** The routing line of the /tokens report. */
 export function routeLine(r: Route, cfg: Routing | undefined): string {
   if (!cfg) return '  routing: off'
-  const loop = r.handsOff ? 'your /model choice (routing stopped for this session)' : r.tier ? `${cfg.models[r.tier]} (${r.tier})` : "the session's model"
+  const loop = r.tier ? `${cfg.models[r.tier]} (${r.tier})` : "the session's model"
   const last = r.last ? `\n  last prompt: ${r.last}` : ''
   return `  routing: main loop on ${loop}; ${r.switches} switches, ${r.subagents} subagents routed${last}`
 }

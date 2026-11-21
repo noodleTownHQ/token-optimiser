@@ -1,6 +1,6 @@
 {
   "name": "token-optimiser",
-  "version": "0.7.0",
+  "version": "0.8.0",
   "description": "Spend fewer tokens for the same work: the model follows the job (a cheaper one for lookups and subagents, the strong one for design), and tool output, edits and searches are kept small. A /tokens report shows what it did",
   "author": {
     "name": "noodleTownHQ"
@@ -45,6 +45,12 @@
       "title": "Light only at (% of the 7-day limit)",
       "description": "On a plan login, once this much of the 7-day limit is used, everything runs on the light model",
       "default": 90
+    },
+    "handPickPrompts": {
+      "type": "number",
+      "title": "Prompts a hand-picked model is kept",
+      "description": "After you change model with /model, routing leaves it alone for this many prompts, then resumes",
+      "default": 5
     },
     "subagentTiers": {
       "type": "string",
