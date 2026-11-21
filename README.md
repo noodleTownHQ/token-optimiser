@@ -30,9 +30,11 @@ Only step 1 is a model's judgement. Steps 2 and 3 are plain functions in [`core/
 
 A move writes the context once into the new model's prompt cache. At the prices omp bills, a one-hour cache write on Sonnet 5.5 costs twice its input price ($4 per million tokens), and each request after it reads that context for $0.10 per million less than Opus 5.5 would. The move has paid for itself after 40 requests on cache reads alone, sooner once output is counted (25 requests with a five-minute cache, whose write costs 1.25 times input). The model moved away from keeps its own cache (an hour on a plan login, five minutes on an API key), so moving back usually costs a read, not a second write.
 
-Checked against real use: 845 main-loop turns recorded by one omp install (70 sessions, the 30 days to 21 Nov 2026) were replayed with each turn on its tier's model and every cache write and expiry counted. Priced on the models actually used, the replay comes to 1.00 of what those sessions were billed. Following the tier cost 35% less, with a one-hour cache and with a five-minute one. Nearly all of the saving is ordinary work on Sonnet instead of Opus; lookups on Haiku add under 2 points.
+Checked against real use: 849 main-loop turns recorded by one omp install (64 sessions, the 30 days to 21 Nov 2026) were replayed with each turn on its tier's model and every cache write and expiry counted. Priced on the models actually used, the replay comes to 1.00 of what those sessions were billed. Following the tier cost 35% less, with a one-hour cache and with a five-minute one. Nearly all of the saving is ordinary work on Sonnet instead of Opus; lookups on Haiku add under 2 points.
 
-A context-size limit would not have helped. Moving down every time saved 39.5%; choosing with hindsight when to decline a move saved 39.7%. The rest of the gap to 35% is heavy work that the rule moves up to Opus where the recorded sessions ran it on a cheaper model: that is spent on purpose.
+A context-size limit would not have helped. Moving down every time saved 39.6%; choosing with hindsight when to decline a move saved 39.7%. The rest of the gap to 35% (4.6 points) is heavy work that the rule moves up to Opus where the recorded sessions ran it on a cheaper model: that is spent on purpose.
+
+Run it on your own sessions: `bun omp/replay.ts` (options `--days`, `--until`, `--ttl`, `--dir`; see the header of [`omp/replay.ts`](omp/replay.ts)). Your figures will differ, and so will a later run on mine, because the window moves and the sessions grow.
 
 This is an estimate, not a bill. The replay read the prompts with the fixed rules, which call most turns `standard`, and it assumes the cheaper model makes the same requests and writes the same output.
 
@@ -159,7 +161,7 @@ The main-loop models must be full ids; the engine refuses an alias such as `haik
 
 ```
 core/    the routing rules: pure functions, no host code
-omp/     the omp extension
+omp/     the omp extension, and replay.ts, which prices the rule on your own sessions
 hooks/   the Claude Code mod
 tests/   Claude Code tests (claude plugin test)
 ```

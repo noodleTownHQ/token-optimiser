@@ -5,8 +5,8 @@
 // that was the context being re-read or re-written, and Opus costs twice Sonnet on every token type. So the model follows
 // the work, down as well as up, at any context size. A move writes the context once into the new model's cache; every
 // request after it is cheaper, and the model moved away from keeps its own cache (an hour on a plan login, five minutes
-// on an API key), so moving back costs a read. Replaying 845 recorded turns that way cost 35% less than the models
-// actually used, cache writes included, and declining a move down with hindsight gained 0.2 of a point: there is no
+// on an API key), so moving back costs a read. Replaying 849 recorded turns that way cost 35% less than the models
+// actually used, cache writes included, and declining a move down with hindsight gained 0.1 of a point: there is no
 // size limit.
 
 export const TIERS = ['light', 'standard', 'heavy'] as const
