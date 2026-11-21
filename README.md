@@ -20,12 +20,21 @@ It does two things:
 
 Every decision follows the same steps, and each one is written down (see [Seeing why](#seeing-why)).
 
-1. **Is any move open?** While the context is small (at most `contextCeilingTokens` above an empty session's), the main loop may move to any tier. Past that it may only move **up**. A move down would abandon a prompt cache worth more than the cheaper model saves; a move up is allowed because an answer from too weak a model wastes more than one cache rewrite. If no move is open, the prompt is not read at all and nothing is spent.
-2. **Read the prompt.** The light model (Haiku 5.5 by default) is shown the prompt and the end of the assistant's last reply, and answers with one word: `light`, `standard` or `heavy`. The last reply is there so that "yes, do it" takes the tier of the work that was proposed. If the call fails or takes more than 5 seconds, a fixed set of rules (keywords, length, number of files named) reads the prompt instead.
-3. **Apply the quota guard.** On a plan login, once 70% of the 7-day limit is used, heavy work runs on the standard model; from 90% everything runs on the light model. On an API key there is no limit to read and nothing is held.
-4. **Move, or stay.** The loop moves when the tier is open and differs from the one it is on. The choice holds until a later prompt changes it.
+1. **Read the prompt.** The light model (Haiku 5.5 by default) is shown the prompt and the end of the assistant's last reply, and answers with one word: `light`, `standard` or `heavy`. The last reply is there so that "yes, do it" takes the tier of the work that was proposed. If the call fails or takes more than 5 seconds, a fixed set of rules (keywords, length, number of files named) reads the prompt instead.
+2. **Apply the quota guard.** On a plan login, once 70% of the 7-day limit is used, heavy work runs on the standard model; from 90% everything runs on the light model. On an API key there is no limit to read and nothing is held.
+3. **Move, or stay.** The loop moves when the tier differs from the one it is on: down as well as up, at any context size. The choice holds until a later prompt changes it.
 
-Only step 2 is a model's judgement. Steps 1, 3 and 4 are plain functions in [`core/router.ts`](core/router.ts): the same inputs always give the same decision.
+Only step 1 is a model's judgement. Steps 2 and 3 are plain functions in [`core/router.ts`](core/router.ts): the same inputs always give the same decision.
+
+### Why it moves down in a long session
+
+A move writes the context once into the new model's prompt cache. At the prices omp bills, a one-hour cache write on Sonnet 5.5 costs twice its input price ($4 per million tokens), and each request after it reads that context for $0.10 per million less than Opus 5.5 would. The move has paid for itself after 40 requests on cache reads alone, sooner once output is counted (25 requests with a five-minute cache, whose write costs 1.25 times input). The model moved away from keeps its own cache (an hour on a plan login, five minutes on an API key), so moving back usually costs a read, not a second write.
+
+Checked against real use: 845 main-loop turns recorded by one omp install (70 sessions, the 30 days to 21 Nov 2026) were replayed with each turn on its tier's model and every cache write and expiry counted. Priced on the models actually used, the replay comes to 1.00 of what those sessions were billed. Following the tier cost 35% less, with a one-hour cache and with a five-minute one. Nearly all of the saving is ordinary work on Sonnet instead of Opus; lookups on Haiku add under 2 points.
+
+A context-size limit would not have helped. Moving down every time saved 39.5%; choosing with hindsight when to decline a move saved 39.7%. The rest of the gap to 35% is heavy work that the rule moves up to Opus where the recorded sessions ran it on a cheaper model: that is spent on purpose.
+
+This is an estimate, not a bill. The replay read the prompts with the fixed rules, which call most turns `standard`, and it assumes the cheaper model makes the same requests and writes the same output.
 
 A model you pick by hand (`/model`) is left alone for the rest of the session.
 
@@ -94,7 +103,6 @@ Set in the config menu (`/config`), or in `~/.claude/settings.json` under `plugi
 | `lightModel` | `claude-haiku-5-5` | Model for light work; it also reads each prompt |
 | `standardModel` | `claude-sonnet-5-5` | Model for ordinary implementation |
 | `heavyModel` | `claude-opus-5-5` | Model for design and root-cause work |
-| `contextCeilingTokens` | `30000` | The loop moves down only while its context is at most this far above an empty session's |
 | `holdHeavyAtPercent` | `70` | Share of the 7-day limit from which heavy work runs on the standard model |
 | `lightOnlyAtPercent` | `90` | Share of the 7-day limit from which everything runs on the light model |
 | `subagentTiers` | built-in table | JSON object of agent type to `light`, `standard` or `heavy` |
@@ -116,7 +124,6 @@ The main-loop models must be full ids; the engine refuses an alias such as `haik
 |---|---|---|
 | `enabled` | `true` | Switch the extension off without removing it |
 | `tiers` | Haiku 5.5, Sonnet 5.5, Opus 5.5 | Tier to model, as `provider/id` |
-| `contextCeilingTokens` | `30000` | As above |
 | `quotaGuard` | `{ "enabled": true, "holdHeavyAt": 0.7, "lightOnlyAt": 0.9 }` | As above, as fractions |
 | `subagents` | built-in table | Agent type to tier; replaces the table |
 | `mcpHints` | `{}` | MCP server to a pattern. When a prompt matches and the server is switched off, you are told once how to turn it on |
@@ -145,7 +152,6 @@ The main-loop models must be full ids; the engine refuses an alias such as `haik
 - Savings shown by `/tokens` for trimmed output are estimates (4 characters per token).
 - Claude Code reports the session model's context window whichever model a request runs on.
 - On an API key the quota guard does nothing: there is no 7-day limit to read.
-- In Claude Code a session on a model that is none of the three tiers moves only while its context is small.
 - In omp, without the `compaction.modelThresholds` setting above, a move to Haiku 5.5 above 100,000 tokens of context triggers compaction.
 - No before-and-after cost figure is published yet.
 

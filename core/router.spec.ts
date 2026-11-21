@@ -1,11 +1,10 @@
 // Run with `bun test core omp`. Named .spec.ts so `claude plugin test`, which takes every *.test.ts, leaves it to bun.
 import { describe, expect, test } from 'bun:test'
 
-import { DEFAULT_CEILING, DEFAULT_GUARD, baselineOf, classifierPrompt, classify, decide, guardedTier, openTiers, parseSubagents, parseTier, subagentTier, tierOf } from './router'
+import { DEFAULT_GUARD, classifierPrompt, classify, decide, guardedTier, parseSubagents, parseTier, subagentTier, tierOf } from './router'
 import type { Policy } from './router'
 
 const POLICY: Policy = {
-  contextCeilingTokens: DEFAULT_CEILING,
   quotaGuard: DEFAULT_GUARD,
   subagents: { scout: 'light', task: 'standard', 'egm-design': 'heavy' },
 }
@@ -49,14 +48,6 @@ describe('guardedTier', () => {
   })
 })
 
-describe('baselineOf', () => {
-  test('is the smallest observation, or the current size when there is none', () => {
-    expect(baselineOf([], 180_000)).toBe(180_000)
-    expect(baselineOf([190_000, 181_000, 400_000], 300_000)).toBe(181_000)
-    expect(baselineOf([190_000], 150_000)).toBe(150_000)
-  })
-})
-
 describe('the classifier', () => {
   test('is shown the end of the last reply, then the request', () => {
     expect(classifierPrompt('yes, do it', `${'x'.repeat(900)} Shall I redesign the queue?`)).toMatch(/^End of the assistant's last reply:\nx{572} Shall I redesign the queue\?\n\nNext request:\nyes, do it$/)
@@ -70,37 +61,15 @@ describe('the classifier', () => {
   })
 })
 
-describe('openTiers', () => {
-  const small = { tokens: 80_000, baseline: 50_000 }
-  const large = { tokens: 80_001, baseline: 50_000 }
-
-  test('a small context may move anywhere but where it is', () => {
-    expect(openTiers({ ...small, current: 'standard' }, POLICY)).toEqual(['light', 'heavy'])
-    expect(openTiers(small, POLICY)).toEqual(['light', 'standard', 'heavy'])
-  })
-  test('past the ceiling the loop only moves up', () => {
-    expect(openTiers({ ...large, current: 'light' }, POLICY)).toEqual(['standard', 'heavy'])
-    expect(openTiers({ ...large, current: 'standard' }, POLICY)).toEqual(['heavy'])
-    expect(openTiers({ ...large, current: 'heavy' }, POLICY)).toEqual([])
-  })
-  test('past the ceiling a model outside the tiers stays', () => {
-    expect(openTiers(large, POLICY)).toEqual([])
-  })
-  test('the quota guard closes the tiers above its cap', () => {
-    expect(openTiers({ ...small, quotaUsed: 0.8 }, POLICY)).toEqual(['light', 'standard'])
-    expect(openTiers({ ...large, current: 'standard', quotaUsed: 0.8 }, POLICY)).toEqual([])
-    expect(openTiers({ ...small, current: 'heavy', quotaUsed: 0.95 }, POLICY)).toEqual(['light'])
-  })
-})
-
 describe('decide', () => {
-  const large = { tokens: 80_001, baseline: 50_000 }
-
   test('says what it did and why', () => {
-    expect(decide('light', { tokens: 0, baseline: 0, current: 'heavy' }, POLICY)).toEqual({ tier: 'light', action: 'switch', why: 'light work: moved to the light model' })
-    expect(decide('heavy', { ...large, current: 'heavy' }, POLICY)).toEqual({ tier: 'heavy', action: 'keep', why: 'heavy work: already on the heavy model' })
-    expect(decide('light', { ...large, current: 'standard' }, POLICY)).toMatchObject({ action: 'hold', why: 'light work: the context is past the ceiling, so the model stays and its cache is kept' })
-    expect(decide('heavy', { ...large, current: 'light', quotaUsed: 0.8 }, POLICY)).toEqual({ tier: 'standard', action: 'switch', why: 'heavy work, held to standard by the quota guard: moved to the standard model' })
+    expect(decide('light', { current: 'heavy' }, POLICY)).toEqual({ tier: 'light', action: 'switch', why: 'light work: moved to the light model' })
+    expect(decide('heavy', { current: 'heavy' }, POLICY)).toEqual({ tier: 'heavy', action: 'keep', why: 'heavy work: already on the heavy model' })
+    expect(decide('heavy', { current: 'light', quotaUsed: 0.8 }, POLICY)).toEqual({ tier: 'standard', action: 'switch', why: 'heavy work, held to standard by the quota guard: moved to the standard model' })
+    expect(decide('heavy', { current: 'standard', quotaUsed: 0.8 }, POLICY)).toEqual({ tier: 'standard', action: 'keep', why: 'heavy work, held to standard by the quota guard: already on the standard model' })
+  })
+  test('a model that serves no tier is left for the tier the prompt asks for', () => {
+    expect(decide('standard', {}, POLICY)).toMatchObject({ tier: 'standard', action: 'switch' })
   })
 })
 

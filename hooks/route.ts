@@ -7,7 +7,7 @@
 //   Quota: the engine reports the share of the 7-day limit used on a plan login; on an API key there is none, so nothing is held.
 import type { EngineInterface, TurnStepInput } from 'claude-code'
 
-import { CLASSIFIER_SYSTEM, DEFAULT_CEILING, DEFAULT_GUARD, baselineOf, classifierPrompt, classify, decide, openTiers, parseSubagents, parseTier, subagentTier, tierOf } from '../core/router'
+import { CLASSIFIER_SYSTEM, DEFAULT_GUARD, classifierPrompt, classify, decide, parseSubagents, parseTier, subagentTier, tierOf } from '../core/router'
 import type { Policy, Tier } from '../core/router'
 
 export interface Routing extends Policy {
@@ -21,9 +21,6 @@ const ALIAS = { light: 'haiku', standard: 'sonnet', heavy: 'opus' } as const sat
 // Claude Code's built-in agent types. A fork is never listed: it runs on its parent's context and cache.
 const SUBAGENTS: Record<string, Tier> = { Explore: 'light', 'general-purpose': 'standard', Plan: 'heavy' }
 
-/** $.store key: the context sizes recent sessions began at. */
-const STARTS = 'session-starts'
-
 /** One session's routing state. */
 export interface Route {
   /** The person's prompt, until the turn's first step has routed it. */
@@ -36,17 +33,13 @@ export interface Route {
   offered?: string
   /** Set once the person changes model by hand: the router leaves the main loop alone from then on. */
   handsOff: boolean
-  /** Whether this session's starting context is on record. */
-  isRecorded: boolean
   /** What the router did with the last prompt, and why. */
   last?: string
   switches: number
-  /** Prompts whose tier was closed: the loop kept its model, and its cache. */
-  held: number
   subagents: number
 }
 
-export const newRoute = (): Route => ({ prompt: '', reply: '', handsOff: false, isRecorded: false, switches: 0, held: 0, subagents: 0 })
+export const newRoute = (): Route => ({ prompt: '', reply: '', handsOff: false, switches: 0, subagents: 0 })
 
 /** The routing a person's options ask for; undefined when routing is switched off. */
 export function routingFrom(options: Readonly<Record<string, unknown>>): Routing | undefined {
@@ -59,7 +52,6 @@ export function routingFrom(options: Readonly<Record<string, unknown>>): Routing
       standard: text('standardModel', 'claude-sonnet-5-5'),
       heavy: text('heavyModel', 'claude-opus-5-5'),
     },
-    contextCeilingTokens: positive('contextCeilingTokens', DEFAULT_CEILING),
     quotaGuard: {
       enabled: true,
       holdHeavyAt: positive('holdHeavyAtPercent', DEFAULT_GUARD.holdHeavyAt * 100) / 100,
@@ -69,16 +61,16 @@ export function routingFrom(options: Readonly<Record<string, unknown>>): Routing
   }
 }
 
-/** What the router reads of $.session.usage(). Before a session's first request there are no tokens and no limits yet. */
+/** What the router reads of $.session.usage(). Before a session's first request there are no limits yet. */
 interface Usage {
-  context: { tokens?: number }
   rateLimits: readonly { kind: string; percentUsed: number }[]
 }
 
-async function reading($: EngineInterface): Promise<{ tokens: number; quotaUsed: number | undefined }> {
+/** Share of the 7-day limit used, 0..1; undefined on an API key, which has none. */
+async function quotaUsed($: EngineInterface): Promise<number | undefined> {
   const usage: Usage | undefined = await $.session.usage().catch(() => undefined)
   const week = usage?.rateLimits.find(limit => limit.kind === 'seven_day')
-  return { tokens: usage?.context.tokens ?? 0, quotaUsed: week && week.percentUsed / 100 }
+  return week && week.percentUsed / 100
 }
 
 /** The light model's reading of a prompt; undefined when it gave none in time. */
@@ -96,29 +88,15 @@ export async function mainModel($: EngineInterface, e: TurnStepInput, r: Route, 
   r.offered = e.model
   if (r.handsOff) return e.model
 
-  const { tokens, quotaUsed } = await reading($)
   const current = r.tier ? cfg.models[r.tier] : e.model
   const prompt = r.prompt
   r.prompt = ''
-  const isStart = !r.isRecorded && tokens > 0
-  if (prompt === '' && !isStart) return current
-
-  const starts = ((await $.store.get(STARTS)) ?? []) as number[]
-  if (isStart) {
-    r.isRecorded = true
-    await $.store.set(STARTS, [...starts, tokens].slice(-30))
-  }
   if (prompt === '') return current
 
-  const now = { tokens, baseline: baselineOf(starts, tokens), quotaUsed, current: r.tier ?? tierOf(e.model, cfg.models) }
-  if (openTiers(now, cfg).length === 0) {
-    r.last = 'not read: no move is open (the context is past the ceiling and nothing above is allowed)'
-    return current
-  }
+  const now = { quotaUsed: await quotaUsed($), current: r.tier ?? tierOf(e.model, cfg.models) }
   const read = await asked($, cfg.models.light, prompt, r.reply)
   const { tier, action, why } = decide(read ?? classify(prompt).tier, now, cfg)
   r.last = `${why} (read by ${read ? 'the light model' : 'the rules'})`
-  if (action === 'hold') r.held++
   if (action !== 'switch') return current
   r.tier = tier
   r.switches++
@@ -128,7 +106,7 @@ export async function mainModel($: EngineInterface, e: TurnStepInput, r: Route, 
 
 /** The model alias for an Agent call, by the agent's type; undefined leaves the call as it is. */
 export async function agentModel($: EngineInterface, agent: string | undefined, r: Route, cfg: Routing): Promise<(typeof ALIAS)[Tier] | undefined> {
-  const choice = subagentTier(agent, (await reading($)).quotaUsed, cfg)
+  const choice = subagentTier(agent, await quotaUsed($), cfg)
   if (!choice) return undefined
   r.subagents++
   return ALIAS[choice.tier]
@@ -139,5 +117,5 @@ export function routeLine(r: Route, cfg: Routing | undefined): string {
   if (!cfg) return '  routing: off'
   const loop = r.handsOff ? 'your /model choice (routing stopped for this session)' : r.tier ? `${cfg.models[r.tier]} (${r.tier})` : "the session's model"
   const last = r.last ? `\n  last prompt: ${r.last}` : ''
-  return `  routing: main loop on ${loop}; ${r.switches} switches, ${r.held} kept for the cache, ${r.subagents} subagents routed${last}`
+  return `  routing: main loop on ${loop}; ${r.switches} switches, ${r.subagents} subagents routed${last}`
 }

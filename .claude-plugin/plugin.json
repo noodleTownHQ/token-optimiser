@@ -1,6 +1,6 @@
 {
   "name": "token-optimiser",
-  "version": "0.5.0",
+  "version": "0.6.0",
   "description": "Spend fewer tokens for the same work: the model follows the job (a cheaper one for lookups and subagents, the strong one for design), and tool output, edits and searches are kept small. A /tokens report shows what it did",
   "author": {
     "name": "noodleTownHQ"
@@ -33,12 +33,6 @@
       "title": "Heavy model",
       "description": "Full model id for design, root-cause and multi-file work in the main loop",
       "default": "claude-opus-5-5"
-    },
-    "contextCeilingTokens": {
-      "type": "number",
-      "title": "Switch only below (tokens)",
-      "description": "The main loop moves to a cheaper model only while its context holds at most this many tokens more than an empty session's; past that the prompt cache is worth more than the move saves. It moves to a stronger model at any size",
-      "default": 30000
     },
     "holdHeavyAtPercent": {
       "type": "number",

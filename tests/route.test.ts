@@ -11,15 +11,13 @@ const STEP = { turnId: 't1', index: 0, model: 'claude-opus-5-5', messageCount: 3
 const AGENT = { tool: 'Agent', description: 'look it up', prompt: 'look it up' } as const
 
 /**
- * A session on Opus. `tokens` is the context size the engine reports (none before the first request) and `weekUsed` the
- * percent of the 7-day limit. `says` is the classifier's reply; while it is unset the classifier fails, so the rules decide.
- * `requests` collects the model each request went out with, `agents` the model each Agent call named, `asked` what the
- * classifier was shown.
+ * A session on Opus. `weekUsed` is the percent of the 7-day limit. `says` is the classifier's reply; while it is unset the
+ * classifier fails, so the rules decide. `requests` collects the model each request went out with, `agents` the model each
+ * Agent call named, `asked` what the classifier was shown.
  */
 const session = (on: On, weekUsed?: number) => {
   world(on, {}, {})
   const s = {
-    tokens: undefined as number | undefined,
     says: undefined as string | undefined,
     requests: [] as string[],
     agents: [] as (string | undefined)[],
@@ -28,7 +26,7 @@ const session = (on: On, weekUsed?: number) => {
   on('session.usage', () => ({
     value: {
       startedAt: 0,
-      context: { window: 1_000_000, ...(s.tokens !== undefined && { tokens: s.tokens }) },
+      context: { window: 1_000_000 },
       rateLimits: weekUsed === undefined ? [] : [{ kind: 'seven_day', percentUsed: weekUsed, resetsAt: 0 }],
       cost: { usd: 0 },
     },
@@ -87,58 +85,17 @@ describe('routing the main loop', () => {
     expect(s.requests).toEqual(['claude-sonnet-5-5'])
   })
 
-  test('a later prompt moves the loop while the context is still small', async ($, on) => {
-    const s = session(on)
-    await $.session.start(START)
-    await $.turn.start({ text: LOOKUP, turnId: 't1' })
-    await finish($.turn.step(STEP))
-    s.tokens = 50_000
-    await finish($.turn.step(STEP))
-    s.tokens = 62_000
-    await $.turn.start({ text: EDIT, turnId: 't2' })
-    await finish($.turn.step(STEP))
-    expect(s.requests).toEqual(['claude-haiku-5-5', 'claude-haiku-5-5', 'claude-sonnet-5-5'])
-  })
-
-  test('past the ceiling the loop does not move down, so the cache is kept', async ($, on) => {
+  test('a later prompt moves the loop down and up', async ($, on) => {
     const s = session(on)
     await $.session.start(START)
     await $.turn.start({ text: EDIT, turnId: 't1' })
     await finish($.turn.step(STEP))
-    s.tokens = 50_000
-    await finish($.turn.step(STEP))
-    s.tokens = 90_000
     await $.turn.start({ text: LOOKUP, turnId: 't2' })
     await finish($.turn.step(STEP))
-    expect(s.requests).toEqual(['claude-sonnet-5-5', 'claude-sonnet-5-5', 'claude-sonnet-5-5'])
-    expect(JSON.stringify(await $.command.run({ command: 'tokens', args: '' }))).toContain('1 switches, 1 kept for the cache')
-  })
-
-  test('past the ceiling the loop still moves up when the work needs it', async ($, on) => {
-    const s = session(on)
-    await $.session.start(START)
-    await $.turn.start({ text: LOOKUP, turnId: 't1' })
+    await $.turn.start({ text: DESIGN, turnId: 't3' })
     await finish($.turn.step(STEP))
-    s.tokens = 50_000
-    await finish($.turn.step(STEP))
-    s.tokens = 90_000
-    await $.turn.start({ text: DESIGN, turnId: 't2' })
-    await finish($.turn.step(STEP))
-    expect(s.requests).toEqual(['claude-haiku-5-5', 'claude-haiku-5-5', 'claude-opus-5-5'])
-  })
-
-  test('a prompt that could move nothing is not classified', async ($, on) => {
-    const s = session(on)
-    await $.session.start(START)
-    await $.turn.start({ text: DESIGN, turnId: 't1' })
-    await finish($.turn.step(STEP))
-    s.tokens = 50_000
-    await finish($.turn.step(STEP))
-    s.tokens = 90_000
-    await $.turn.start({ text: LOOKUP, turnId: 't2' })
-    await finish($.turn.step(STEP))
-    expect(s.requests).toEqual(['claude-opus-5-5', 'claude-opus-5-5', 'claude-opus-5-5'])
-    expect(s.asked).toHaveLength(1)
+    expect(s.requests).toEqual(['claude-sonnet-5-5', 'claude-haiku-5-5', 'claude-opus-5-5'])
+    expect(JSON.stringify(await $.command.run({ command: 'tokens', args: '' }))).toContain('3 switches')
   })
 
   test('a model picked by hand ends routing for the session', async ($, on) => {

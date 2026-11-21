@@ -1,10 +1,9 @@
 // token-optimiser for omp: the model follows the job. The decisions are ../core/router.ts; this file is omp's side of them.
 //
-//   1. Subagents (before_subagent_spawn): a child starts with an empty context, so its model costs no cache to choose.
-//   2. Main loop (before_agent_start): the light model reads the prompt (the core's rules when it cannot) and the model follows.
-//      Any move while the context is small (a new session, or right after a compaction or handoff); past that only up, since a
-//      move down would abandon a prompt cache worth more than it saves. A model the person picks by hand (/model) is never
-//      touched again in that session.
+//   1. Subagents (before_subagent_spawn): each agent type has a tier, and a child that names no model gets that tier's.
+//   2. Main loop (before_agent_start): the light model reads the prompt (the core's rules when it cannot) and the model
+//      follows, down as well as up, at any context size. A model the person picks by hand (/model) is never touched
+//      again in that session.
 //   3. Quota guard: as the 7-day Claude quota (`omp usage`) runs out, heavy work drops to the standard model, then all of it to light.
 //
 // Thinking effort is omp's own (`ultrathink` and `chillax` steer it); nothing here changes it.
@@ -14,7 +13,7 @@ import * as fs from 'node:fs'
 import * as os from 'node:os'
 import * as path from 'node:path'
 
-import { CLASSIFIER_SYSTEM, DEFAULT_CEILING, DEFAULT_GUARD, TIERS, baselineOf, classifierPrompt, classify, decide, isRecord, openTiers, parseSubagents, parseTier, subagentTier, tierOf } from '../core/router'
+import { CLASSIFIER_SYSTEM, DEFAULT_GUARD, TIERS, classifierPrompt, classify, decide, isRecord, parseSubagents, parseTier, subagentTier, tierOf } from '../core/router'
 import type { Policy, Tier } from '../core/router'
 
 export interface RouterConfig extends Policy {
@@ -35,7 +34,6 @@ export const DEFAULT_CONFIG: RouterConfig = {
     standard: 'anthropic/claude-sonnet-5-5',
     heavy: 'anthropic/claude-opus-5-5',
   },
-  contextCeilingTokens: DEFAULT_CEILING,
   quotaGuard: DEFAULT_GUARD,
   // Search and read agents are light, general task agents standard, the ones that judge heavy.
   subagents: {
@@ -61,7 +59,6 @@ export function mergeConfig(raw: unknown): RouterConfig {
       if (typeof model === 'string' && model) out.tiers[tier] = model
     }
   }
-  if (typeof raw.contextCeilingTokens === 'number' && raw.contextCeilingTokens > 0) out.contextCeilingTokens = raw.contextCeilingTokens
   if (isRecord(raw.quotaGuard)) {
     const q = raw.quotaGuard
     if (typeof q.enabled === 'boolean') out.quotaGuard.enabled = q.enabled
@@ -108,7 +105,6 @@ export function hintsFor(prompt: string, hints: Record<string, string>, disabled
 const DIR = path.join(os.homedir(), '.omp', 'agent')
 const CONFIG_PATH = path.join(DIR, 'token-optimiser.json')
 const LOG_PATH = path.join(DIR, 'token-optimiser.jsonl')
-const BASELINE_PATH = path.join(DIR, 'token-optimiser-baseline.json')
 const MCP_PATH = path.join(DIR, 'mcp.json')
 const QUOTA_TTL_MS = 10 * 60 * 1000
 
@@ -126,12 +122,6 @@ function log(entry: Record<string, unknown>): void {
   } catch {
     /* a log that cannot be written never stops a turn */
   }
-}
-
-/** The context sizes recent sessions began at. */
-function sessionStarts(): number[] {
-  const raw = readJson(BASELINE_PATH)
-  return Array.isArray(raw) ? raw.filter((n): n is number => typeof n === 'number') : []
 }
 
 function disabledServers(): string[] {
@@ -219,7 +209,6 @@ export default function (pi: ExtensionAPI) {
     const cfg = mergeConfig(readJson(CONFIG_PATH))
     if (!cfg.enabled) return
     const id = ctx.sessionManager.getSessionId()
-    const isNew = !sessions.has(id)
     const s = sessions.get(id) ?? { handsOff: false, reply: '', told: new Set<string>() }
     sessions.set(id, s)
 
@@ -234,19 +223,9 @@ export default function (pi: ExtensionAPI) {
     if (s.lastSet && current && current !== s.lastSet) s.handsOff = true
     if (s.handsOff) return
 
-    const tokens = ctx.getContextUsage()?.tokens ?? 0
-    const starts = sessionStarts()
-    if (isNew && tokens > 0) {
-      try {
-        fs.writeFileSync(BASELINE_PATH, JSON.stringify([...starts, tokens].slice(-30)))
-      } catch {
-        /* the baseline is a hint; losing it only makes the router cautious */
-      }
-    }
     void refreshQuota()
-    const state = { tokens, baseline: baselineOf(starts, tokens), quotaUsed: quota.used, current: tierOf(current, cfg.tiers) }
-    const entry = { event: 'main', model: current, ...state }
-    if (openTiers(state, cfg).length === 0) return void log({ ...entry, action: 'not read', why: 'no move is open' })
+    const state = { quotaUsed: quota.used, current: tierOf(current, cfg.tiers) }
+    const entry = { event: 'main', model: current, tokens: ctx.getContextUsage()?.tokens ?? 0, ...state }
 
     const read = await asked(ctx, cfg.tiers.light, event.prompt, s.reply)
     const wanted = read ?? classify(event.prompt).tier

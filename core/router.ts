@@ -1,11 +1,13 @@
 // What the router decides, for both hosts: omp (omp/router.ts) and Claude Code (hooks/route.ts).
 // Pure functions: no files, no processes, no host API, so each host loads this file as it is.
 //
-// The rule behind it, measured on one omp install over two weeks (29 Oct-12 Nov 2026): Opus was 54% of the cost, 90% of that
-// was the context being re-read or re-written (median request 403k tokens), and Opus costs twice Sonnet on every token type.
-// So a cheaper model is chosen where the choice is free (a subagent starts empty; a new or freshly compacted session is
-// small), and past that the model only ever moves up, when the work needs it: the prompt cache is worth more than a
-// cheaper model would save.
+// The rule behind it, measured on one omp install: Opus was 54% of the cost over two weeks (29 Oct-12 Nov 2026), 90% of
+// that was the context being re-read or re-written, and Opus costs twice Sonnet on every token type. So the model follows
+// the work, down as well as up, at any context size. A move writes the context once into the new model's cache; every
+// request after it is cheaper, and the model moved away from keeps its own cache (an hour on a plan login, five minutes
+// on an API key), so moving back costs a read. Replaying 845 recorded turns that way cost 35% less than the models
+// actually used, cache writes included, and declining a move down with hindsight gained 0.2 of a point: there is no
+// size limit.
 
 export const TIERS = ['light', 'standard', 'heavy'] as const
 export type Tier = (typeof TIERS)[number]
@@ -19,14 +21,11 @@ export interface QuotaGuard {
 }
 
 export interface Policy {
-  /** The main loop changes model only while its context holds at most this many tokens more than an empty session's. */
-  contextCeilingTokens: number
   quotaGuard: QuotaGuard
   /** Agent type -> tier. An agent not listed keeps the model it would have had. */
   subagents: Record<string, Tier>
 }
 
-export const DEFAULT_CEILING = 30_000
 export const DEFAULT_GUARD: QuotaGuard = { enabled: true, holdHeavyAt: 0.7, lightOnlyAt: 0.9 }
 
 // ---------------------------------------------------------------- how hard is the prompt, by rules
@@ -124,7 +123,7 @@ export function parseTier(reply: string): Tier | undefined {
   return TIERS.find(tier => tier === word)
 }
 
-// ---------------------------------------------------------------- what the quota and the cache allow
+// ---------------------------------------------------------------- what the quota allows
 
 /** The tier the 7-day quota allows. An unknown quota (an API key, or before the first request) never holds anything back. */
 export function guardedTier(tier: Tier, quotaUsed: number | undefined, guard: QuotaGuard): Tier {
@@ -133,37 +132,12 @@ export function guardedTier(tier: Tier, quotaUsed: number | undefined, guard: Qu
   return TIERS.indexOf(tier) > TIERS.indexOf(cap) ? cap : tier
 }
 
-/**
- * The context of an empty session: the smallest size recent sessions began at, or the current one when there is none.
- * A new session already holds the system prompt and every tool schema, so "small" is measured from here, not from zero.
- */
-export function baselineOf(observations: readonly number[], now: number): number {
-  return Math.min(...observations, now)
-}
-
 /** The state of the main loop as a prompt arrives. */
 export interface Reading {
-  /** Tokens in the context now. */
-  tokens: number
-  /** Tokens in the context of an empty session (see baselineOf). */
-  baseline: number
   /** Share of the 7-day quota used, 0..1, when the host can tell. */
   quotaUsed?: number
   /** The tier the loop runs on; undefined when its model is not one of the tiers'. */
   current?: Tier
-}
-
-/**
- * The tiers the loop may move to now; when there is none, the prompt need not be classified at all.
- * Down, or off a model outside the tiers, only while the context is small: past the ceiling the prompt cache is worth
- * more than a cheaper model saves. Up at any size: an answer from too weak a model wastes more than one cache rewrite.
- * Never above what the quota allows.
- */
-export function openTiers(now: Reading, policy: Policy): Tier[] {
-  const cap = TIERS.indexOf(guardedTier('heavy', now.quotaUsed, policy.quotaGuard))
-  const from = now.current === undefined ? Infinity : TIERS.indexOf(now.current)
-  const isSmall = now.tokens - now.baseline <= policy.contextCeilingTokens
-  return TIERS.filter((tier, rank) => tier !== now.current && rank <= cap && (isSmall || rank > from))
 }
 
 /** The tier a model serves in a tier -> model table, if it serves one. */
@@ -175,7 +149,7 @@ export function tierOf(model: string | undefined, models: Record<Tier, string>):
 export interface Decision {
   /** The tier the quota allows the prompt. */
   tier: Tier
-  action: 'switch' | 'keep' | 'hold'
+  action: 'switch' | 'keep'
   why: string
 }
 
@@ -184,9 +158,6 @@ export function decide(wanted: Tier, now: Reading, policy: Policy): Decision {
   const tier = guardedTier(wanted, now.quotaUsed, policy.quotaGuard)
   const asks = tier === wanted ? `${wanted} work` : `${wanted} work, held to ${tier} by the quota guard`
   if (tier === now.current) return { tier, action: 'keep', why: `${asks}: already on the ${tier} model` }
-  if (!openTiers(now, policy).includes(tier)) {
-    return { tier, action: 'hold', why: `${asks}: the context is past the ceiling, so the model stays and its cache is kept` }
-  }
   return { tier, action: 'switch', why: `${asks}: moved to the ${tier} model` }
 }
 

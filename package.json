@@ -1,6 +1,6 @@
 {
   "name": "token-optimiser",
-  "version": "0.5.0",
+  "version": "0.6.0",
   "description": "Spend fewer tokens for the same work in omp and Claude Code: the model follows the job, and tool output stays small",
   "license": "MIT",
   "repository": "github:noodleTownHQ/token-optimiser",

@@ -9,9 +9,8 @@ describe('mergeConfig', () => {
     expect(mergeConfig('nope')).toEqual(DEFAULT_CONFIG)
   })
   test('keeps the defaults for anything of the wrong shape', () => {
-    const cfg = mergeConfig({ tiers: { heavy: 'x/y', light: 5 }, contextCeilingTokens: -1, quotaGuard: { holdHeavyAt: 0.5, lightOnlyAt: 'soon' } })
+    const cfg = mergeConfig({ tiers: { heavy: 'x/y', light: 5 }, quotaGuard: { holdHeavyAt: 0.5, lightOnlyAt: 'soon' } })
     expect(cfg.tiers).toEqual({ ...DEFAULT_CONFIG.tiers, heavy: 'x/y' })
-    expect(cfg.contextCeilingTokens).toBe(DEFAULT_CONFIG.contextCeilingTokens)
     expect(cfg.quotaGuard).toEqual({ ...DEFAULT_CONFIG.quotaGuard, holdHeavyAt: 0.5 })
   })
   test('a subagents table replaces the default one', () => {

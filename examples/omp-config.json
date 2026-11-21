@@ -5,7 +5,6 @@
     "standard": "anthropic/claude-sonnet-5-5",
     "heavy": "anthropic/claude-opus-5-5"
   },
-  "contextCeilingTokens": 30000,
   "quotaGuard": { "enabled": true, "holdHeavyAt": 0.7, "lightOnlyAt": 0.9 },
   "subagents": {
     "scout": "light",
