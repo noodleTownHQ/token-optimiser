@@ -15,8 +15,8 @@
     "security-reviewer": "heavy",
     "plan": "heavy"
   },
+  "mcp": { "trim": "auto", "keep": [], "prompts": 10, "minSessions": 2, "sessions": 5 },
   "mcpHints": {
-    "pdfcraft": "\\bpdf\\b|\\.pdf\\b",
-    "stitch": "\\bstitch\\b"
+    "pdf-tools": "\\bpdf\\b|\\.pdf\\b"
   }
 }

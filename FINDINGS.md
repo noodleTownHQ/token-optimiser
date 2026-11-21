@@ -2,6 +2,27 @@
 
 A dated log of what was measured and what changed because of it. Newest first. Raw cost snapshots are in [`findings/cost.jsonl`](findings/cost.jsonl) (`bun omp/cost.ts --snapshot`); the replay figures come from `bun omp/replay.ts`. Everything here is from one install (the author's), so treat it as one data point.
 
+## 21 Nov 2026: unused MCP tools switched off (0.7.0)
+
+One install, omp 19.1.0, three MCP servers offering 869 tools. Input tokens of a session's first request (`reply with the single word ok`):
+
+| Tools in the request | First request |
+|---|---|
+| all 869 MCP tools | 128,734 |
+| the 112 that were ever called (the rule, with its evidence met) | 64,925 |
+| no MCP tools | 53,886 |
+
+Distinct MCP tools called, from the session files: 65 in the last 7 days, 105 in 14, 159 in 30.
+
+What changed because of it:
+
+- **Per tool, not per server.** Two of the three servers carry 860 of the 869 tools and both are in daily use, so a per-server rule could switch off 9 tools at most.
+- **No token estimate is shown.** Four characters a token over each tool's name and description said the 757 tools were 90,401 tokens; the measured difference was 63,809. The tool counts are exact, so those are what is reported.
+- **Nothing is switched back on mid-session.** Tried: after 228 tools were switched off and on again in one session, omp sent them in full (240 tool definitions with input schemas, where they had been one-line entries), and the model API refused every request with a 400 on a parameter named `$filter`. A restore applies from the next session, where the tools load the usual way; checked, no error.
+- **Subagent sessions are read too.** 45 distinct MCP tools were called from subagent session files, which sit in folders beside the parent's file.
+
+Reading 30 days of session files for calls took 1,049 ms the first time; a repeat read of 14 days from the cache took 20 ms.
+
 ## 21 Nov 2026: baseline for the before/after figure (0.6.0)
 
 Cost by window, price index (billed over the same tokens at Opus 5.5 prices; 1.00 is all Opus):

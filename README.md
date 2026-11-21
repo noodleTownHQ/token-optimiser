@@ -24,6 +24,7 @@ Every decision is logged with its reason, and every figure here can be rerun on 
 
 1. **Routes each job to the cheapest model that can do it.** Haiku 5.5 reads each prompt (about half a second, $0.00003) and names a tier. Subagents get a model by their type.
 2. **Keeps large output out of the context** (Claude Code only: omp already does this itself). Long command output is trimmed, searches go to a cheap read-only agent, edits can address lines by a hash instead of retyping them.
+3. **Switches off MCP tools you never call** (omp only). Every connected tool is listed in every request, used or not. Tools that go uncalled across your sessions are left out of the next ones, and one line says so. See [Unused MCP tools](#unused-mcp-tools-omp).
 
 | | Claude Code | omp |
 |---|---|---|
@@ -32,6 +33,7 @@ Every decision is logged with its reason, and every figure here can be rerun on 
 | 7-day quota guard | yes (plan login) | yes |
 | Trimmed output, scout agent, hashline edits | yes | built into omp |
 | Pattern rules, advisor, edit checks, guards | yes | built into omp |
+| Unused MCP tools switched off | no | yes |
 | Hint when a switched-off MCP server is needed | no | yes |
 
 The 35% is an estimate from a replay of one person's sessions, not a bill; how it was measured and what it assumes is under [Why it moves down](#why-it-moves-down-in-a-long-session).
@@ -82,6 +84,32 @@ The 18 prompts and their expected tiers were written by the author, so this is a
 
 Run it yourself, on your own login (54 small requests): `omp --no-extensions -e ./omp/bench.ts -p go`. The prompts are in [`omp/bench.ts`](omp/bench.ts).
 
+## Unused MCP tools (omp)
+
+Each tool an MCP server offers is listed in the prompt of every request. A server can bring hundreds, and most sessions call a handful.
+
+**The rule, per tool.** A tool is switched off once it has been loaded and never called over 10 prompts spread across at least 2 sessions, or over 5 sessions of any length. A tool that was ever called, in any session still on disk, is never switched off. Neither is one you name in `mcp.keep`, or one you restored. The rule is per tool, not per server, because one server can carry hundreds of tools of which a few are used.
+
+**When it acts.** At a session's first prompt, before its first request, on the evidence of earlier sessions. The tool list sits at the front of the prompt, so that is the one moment when changing it costs no cache write. Nothing changes mid-session.
+
+**What you see.** One line at the start of the session, for example `757 of 869 MCP tools are off for this session: never called`. The model is told which servers have tools off and asked to report a missing tool to you, not to work around it.
+
+| Command | What it does |
+|---|---|
+| `/tokens-mcp` | Each server: tools on, tools off, last call, and the rule in force |
+| `/tokens-mcp list <server>` | Every tool of a server with the reason it is on or off |
+| `/tokens-mcp restore <server or tool>` | Gives it back from the next session; it is never switched off again |
+
+A restore waits for the next session on purpose. omp lists an MCP tool as one line; a tool switched back on mid-session is sent in full, with its input schema. That rewrites the prompt cache, and a schema the model API does not accept (a parameter named `$filter`, say) then fails every request.
+
+**Where the evidence is.** `~/.omp/agent/token-optimiser-mcp.json` holds, per tool, the prompts and sessions it was loaded without a call, its last call, and your restored list. Calls are read from omp's own session files, a subagent's included; `token-optimiser-usage.json` beside it caches that read. Delete both to start again. Each decision is a `mcp-trim` line in the log.
+
+**Measured** on one install (21 Nov 2026, omp 19.1.0, three servers, 869 tools, the thresholds lowered so the rule had its evidence): 757 tools had never been called and were switched off, and the first request of a session went from 128,734 input tokens to 64,925. Your figure depends on how many tools you have connected and how many you use.
+
+`"mcp": { "trim": "propose" }` reports what the rule would switch off and changes nothing; `"off"` stops it and keeps no evidence.
+
+This part is omp only for now.
+
 ## Install
 
 ### Claude Code
@@ -107,11 +135,13 @@ To try it for one run: `omp -e ~/src/token-optimiser/omp/router.ts`.
 
 Settings are optional. Copy [`examples/omp-config.json`](examples/omp-config.json) to `~/.omp/agent/token-optimiser.json` and edit it; the file is read on every prompt, so a change applies at once.
 
-One omp setting is needed when a session's context can pass 100,000 tokens. omp's catalog lists Haiku 5.5 with a 100,000-token window, so above that it tries to compact the conversation whenever the router moves to the light model. Give Haiku the limit your other models have:
+If `omp models list` shows your light model with a smaller context window than the others, omp compacts the conversation whenever the router moves to it above that size. Give it the limit your other models have, for example:
 
 ```
 omp config set compaction.modelThresholds '{"anthropic/claude-haiku-5-5":250000}'
 ```
+
+omp 19.1 lists Haiku 5.5 with the same 1M window as Sonnet and Opus, and needs no such setting.
 
 ## Settings
 
@@ -148,7 +178,8 @@ The main-loop models must be full ids; the engine refuses an alias such as `haik
 | `tiers` | Haiku 5.5, Sonnet 5.5, Opus 5.5 | Tier to model, as `provider/id` |
 | `quotaGuard` | `{ "enabled": true, "holdHeavyAt": 0.7, "lightOnlyAt": 0.9 }` | As above, as fractions |
 | `subagents` | built-in table | Agent type to tier; replaces the table |
-| `mcpHints` | `{}` | MCP server to a pattern. When a prompt matches and the server is switched off, you are told once how to turn it on |
+| `mcp` | `{ "trim": "auto", "keep": [], "prompts": 10, "minSessions": 2, "sessions": 5 }` | [Unused MCP tools](#unused-mcp-tools-omp). `trim` is `auto`, `propose` or `off`; `keep` names servers or tools never switched off; the three numbers are the evidence a tool needs |
+| `mcpHints` | `{}` | MCP server to a pattern. When a prompt matches and the whole server is switched off in omp's `mcp.json`, you are told once how to turn it on |
 
 ## The other savers (Claude Code)
 
@@ -174,7 +205,9 @@ The main-loop models must be full ids; the engine refuses an alias such as `haik
 - Savings shown by `/tokens` for trimmed output are estimates (4 characters per token).
 - Claude Code reports the session model's context window whichever model a request runs on.
 - On an API key the quota guard does nothing: there is no 7-day limit to read.
-- In omp, without the `compaction.modelThresholds` setting above, a move to Haiku 5.5 above 100,000 tokens of context triggers compaction.
+- In omp, a light model that the catalog lists with a smaller window than the others triggers compaction on a move to it above that size; see [Install](#omp).
+- The MCP trim counts a tool as called only from session files still on disk. Delete those, and a tool's past calls are forgotten except for what the evidence file already recorded.
+- A tool switched off by the MCP trim comes back from the next session, not the running one.
 - No before-and-after cost figure is published yet: the `after` window below has 5 turns.
 
 ## Cost over time
@@ -192,8 +225,8 @@ Billed is omp's own figure at API list prices, whatever the login pays. The wind
 ## Layout
 
 ```
-core/    the routing rules: pure functions, no host code
-omp/     the omp extension; replay.ts prices the rule on your sessions, cost.ts reports cost by window
+core/    the rules: routing (router.ts) and the MCP trim (mcp.ts). Pure functions, no host code
+omp/     the omp extension; usage.ts reads MCP calls from your sessions, replay.ts prices the routing rule on them, cost.ts reports cost by window
 findings/ cost.jsonl, one line per `cost.ts --snapshot`; FINDINGS.md at the root quotes them
 hooks/   the Claude Code mod
 tests/   Claude Code tests (claude plugin test)
