@@ -2,6 +2,12 @@
 
 A dated log of what was measured and what changed because of it. Newest first. Raw cost snapshots are in [`findings/cost.jsonl`](findings/cost.jsonl) (`bun omp/cost.ts --snapshot`); the replay figures come from `bun omp/replay.ts`. Everything here is from one install (the author's), so treat it as one data point.
 
+## 21 Nov 2026: never move a session to a model that cannot hold it (0.8.1)
+
+Observed in omp: a session of about 133,000 tokens was routed down to the light model, whose window omp showed as 100K (139.6% full), and compaction stopped with "cannot create headroom". The cause was a host setting, not the router: omp cuts a model that has a long-context price tier (here Haiku 5.5, tier above 100,000 tokens) to that threshold while `extendedContext` is off, its default. Models without a tier (Sonnet 5.5, Opus 5.5, Fable 5.2) stayed at 1M.
+
+What changed: a move to a lower tier is raised to the nearest tier whose window holds the session within 80% (`FIT_SHARE`), using the windows the host reports. This outranks the quota guard, since a model that cannot hold the session cannot answer. Eighty percent is a judgement, not a measurement. To keep the light model at its full window in omp, set `extendedContext: true`; beyond the threshold the provider's long-context price applies.
+
 ## 21 Nov 2026: a hand-picked model is held, not kept for the session (0.8.0)
 
 Observed on a long session: the person picked a strong model by hand for one piece of work, and every later prompt of the session ran on it, the short follow-ups included, because a hand pick stopped routing until the session ended. Nothing in the log said so.

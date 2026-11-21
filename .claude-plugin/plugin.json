@@ -1,6 +1,6 @@
 {
   "name": "token-optimiser",
-  "version": "0.8.0",
+  "version": "0.8.1",
   "description": "Spend fewer tokens for the same work: the model follows the job (a cheaper one for lookups and subagents, the strong one for design), and tool output, edits and searches are kept small. A /tokens report shows what it did",
   "author": {
     "name": "noodleTownHQ"

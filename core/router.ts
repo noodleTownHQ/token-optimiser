@@ -141,6 +141,26 @@ export interface Reading {
   quotaUsed?: number
   /** The tier the loop runs on; undefined when its model is not one of the tiers'. */
   current?: Tier
+  /** Tokens the session already sends with every request, when the host can tell. */
+  tokens?: number
+  /** Each tier's usable context window, when the host can tell. A host may give a model less than its full window. */
+  windows?: Partial<Record<Tier, number>>
+}
+
+/**
+ * The share of a window a session may already fill on the model it moves to: the rest is room for the reply and the next
+ * turn's tool output. A judgement, not a measurement.
+ */
+export const FIT_SHARE = 0.8
+
+/**
+ * The lowest tier at or above `tier` whose window holds the session, or `tier` when none does (compaction's job then).
+ * A model that cannot hold the session cannot answer, so this outranks the quota guard.
+ */
+export function fittedTier(tier: Tier, tokens: number | undefined, windows: Partial<Record<Tier, number>> | undefined): Tier {
+  if (!tokens || !windows) return tier
+  const fits = (t: Tier) => windows[t] === undefined || tokens <= windows[t] * FIT_SHARE
+  return TIERS.slice(TIERS.indexOf(tier)).find(fits) ?? tier
 }
 
 /** The tier a model serves in a tier -> model table, if it serves one. */
@@ -150,7 +170,7 @@ export function tierOf(model: string | undefined, models: Record<Tier, string>):
 
 /** What the router does with one prompt, and why, in words a person can check against the rules here. */
 export interface Decision {
-  /** The tier the quota allows the prompt. */
+  /** The tier the quota and the session's size allow the prompt. */
   tier: Tier
   action: 'switch' | 'keep'
   why: string
@@ -158,8 +178,10 @@ export interface Decision {
 
 /** The same inputs always give the same decision: only reading the prompt (`wanted`) is ever a model's judgement. */
 export function decide(wanted: Tier, now: Reading, policy: Policy): Decision {
-  const tier = guardedTier(wanted, now.quotaUsed, policy.quotaGuard)
-  const asks = tier === wanted ? `${wanted} work` : `${wanted} work, held to ${tier} by the quota guard`
+  const guarded = guardedTier(wanted, now.quotaUsed, policy.quotaGuard)
+  const tier = fittedTier(guarded, now.tokens, now.windows)
+  let asks = guarded === wanted ? `${wanted} work` : `${wanted} work, held to ${guarded} by the quota guard`
+  if (tier !== guarded) asks += `, raised to ${tier}: the ${guarded} model's window cannot hold ${now.tokens} tokens`
   if (tier === now.current) return { tier, action: 'keep', why: `${asks}: already on the ${tier} model` }
   return { tier, action: 'switch', why: `${asks}: moved to the ${tier} model` }
 }

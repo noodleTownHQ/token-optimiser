@@ -72,6 +72,13 @@ describe('decide', () => {
   test('a model that serves no tier is left for the tier the prompt asks for', () => {
     expect(decide('standard', {}, POLICY)).toMatchObject({ tier: 'standard', action: 'switch' })
   })
+  test('never moves a session to a model whose window cannot hold it', () => {
+    const windows = { light: 100_000, standard: 1_000_000, heavy: 1_000_000 }
+    expect(decide('light', { current: 'heavy', tokens: 133_000, windows }, POLICY)).toMatchObject({ tier: 'standard', action: 'switch' })
+    expect(decide('light', { current: 'light', tokens: 133_000, windows }, POLICY)).toMatchObject({ tier: 'standard', action: 'switch' })
+    expect(decide('light', { current: 'heavy', tokens: 60_000, windows }, POLICY)).toMatchObject({ tier: 'light', action: 'switch' })
+    expect(decide('light', { current: 'light', tokens: 2_000_000, windows }, POLICY)).toMatchObject({ tier: 'light', action: 'keep' })
+  })
 })
 
 describe('tierOf', () => {

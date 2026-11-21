@@ -363,12 +363,18 @@ export default function (pi: ExtensionAPI) {
     }
 
     void refreshQuota()
+    const tokens = ctx.getContextUsage()?.tokens ?? 0
+    const windows: Partial<Record<Tier, number>> = {}
+    for (const t of TIERS) {
+      const window = ctx.models.resolve(cfg.tiers[t])?.contextWindow
+      if (typeof window === 'number') windows[t] = window
+    }
     const state = { quotaUsed: quota.used, current: tierOf(current, cfg.tiers) }
-    const entry = { event: 'main', model: current, tokens: ctx.getContextUsage()?.tokens ?? 0, ...state }
+    const entry = { event: 'main', model: current, tokens, ...state }
 
     const read = await asked(ctx, cfg.tiers.light, event.prompt, s.reply)
     const wanted = read ?? classify(event.prompt).tier
-    const { tier, action, why } = decide(wanted, state, cfg)
+    const { tier, action, why } = decide(wanted, { ...state, tokens, windows }, cfg)
     const decided = { ...entry, wanted, by: read ? 'model' : 'rules', tier, why }
     if (action !== 'switch') {
       log({ ...decided, action })
