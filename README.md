@@ -49,6 +49,8 @@ Measured on 21 Nov 2026 with Haiku 5.5 through omp, 18 prompts read three times 
 
 The 18 prompts and their expected tiers were written by the author, so this is a smoke test, not a benchmark. The three the rules missed were follow-ups ("yes, do it", "ok go"), which rules cannot read.
 
+Run it yourself, on your own login (54 small requests): `omp --no-extensions -e ./omp/bench.ts -p go`. The prompts are in [`omp/bench.ts`](omp/bench.ts).
+
 ## Install
 
 ### Claude Code

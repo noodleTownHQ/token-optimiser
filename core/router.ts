@@ -1,7 +1,7 @@
 // What the router decides, for both hosts: omp (omp/router.ts) and Claude Code (hooks/route.ts).
 // Pure functions: no files, no processes, no host API, so each host loads this file as it is.
 //
-// The rule behind it, measured on one omp install over two weeks (29 Oct-12 Nov 2026): Opus was 54% of $3,170, 90% of that
+// The rule behind it, measured on one omp install over two weeks (29 Oct-12 Nov 2026): Opus was 54% of the cost, 90% of that
 // was the context being re-read or re-written (median request 403k tokens), and Opus costs twice Sonnet on every token type.
 // So a cheaper model is chosen where the choice is free (a subagent starts empty; a new or freshly compacted session is
 // small), and past that the model only ever moves up, when the work needs it: the prompt cache is worth more than a
