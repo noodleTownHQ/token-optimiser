@@ -155,13 +155,25 @@ The main-loop models must be full ids; the engine refuses an alias such as `haik
 - Claude Code reports the session model's context window whichever model a request runs on.
 - On an API key the quota guard does nothing: there is no 7-day limit to read.
 - In omp, without the `compaction.modelThresholds` setting above, a move to Haiku 5.5 above 100,000 tokens of context triggers compaction.
-- No before-and-after cost figure is published yet.
+- No before-and-after cost figure is published yet: the `after` window below has 5 turns.
+
+## Cost over time
+
+`bun omp/cost.ts` prints what your omp sessions cost in three fixed windows: `before` (no router), `interim` (the earlier regex router, whose 30,000-token ceiling mostly kept the model) and `after` (0.6.0, from its first move on 21 Nov 2026 at 12:15 UTC). The figure to compare is the price index: billed cost over what the same tokens would have cost on Opus 5.5, so 1.00 means all Opus. It does not depend on how long a session ran or how large its context grew. On the author's machine at the start of `after`:
+
+| Window | Turns | Requests | Billed | Price index |
+|---|---|---|---|---|
+| before | 94 | 7,882 | $1,146.06 | 0.99 |
+| interim | 738 | 9,857 | $513.49 | 0.64 |
+| after | 5 | 23 | $1.85 | 0.38 |
+
+Billed is omp's own figure at API list prices, whatever the login pays. The windows hold different work (`before` is mostly long unattended runs), so this is not a controlled comparison, and `after` is too short to say anything yet: rerun it in a couple of weeks.
 
 ## Layout
 
 ```
 core/    the routing rules: pure functions, no host code
-omp/     the omp extension, and replay.ts, which prices the rule on your own sessions
+omp/     the omp extension; replay.ts prices the rule on your sessions, cost.ts reports cost by window
 hooks/   the Claude Code mod
 tests/   Claude Code tests (claude plugin test)
 ```

@@ -7,12 +7,9 @@
 // priced on that model, with a prompt cache per model that expires `ttl` seconds after its last use. Assumes the cheaper
 // model makes the same requests and writes the same output. An estimate, not a bill: `baseline` says how close the
 // pricing is, as the replay of the models actually used over what the sessions were billed (it should be near 1.00).
-import * as fs from 'node:fs'
-import * as os from 'node:os'
-import * as path from 'node:path'
-
-import { classify } from '../core/router'
 import type { Tier } from '../core/router'
+import { SESSIONS_DIR, sessionFiles, sessionTurns } from './sessions'
+import type { Request, Turn } from './sessions'
 
 interface Price {
   in: number
@@ -40,84 +37,20 @@ const arg = (name: string, fallback: string): string => {
 const DAYS = Number(arg('days', '30'))
 const UNTIL = Date.parse(arg('until', new Date().toISOString()))
 const TTL_MS = Number(arg('ttl', '3600')) * 1000
-const DIR = arg('dir', path.join(os.homedir(), '.omp', 'agent', 'sessions'))
+const DIR = arg('dir', SESSIONS_DIR)
 const WRITE_FACTOR = TTL_MS >= 3_600_000 ? 2 : 1.25
 
-interface Request {
-  at: number
-  model: string
-  input: number
-  output: number
-  read: number
-  write: number
-  billed: number
-}
-interface Turn {
-  tier: Tier
-  requests: Request[]
-}
 /** What a model still has cached: when it was last used and how much context it held. */
 type Caches = Map<string, { at: number; tokens: number }>
 /** The model a turn runs on, given the one the loop is on and what each model has cached. */
 type Policy = (turn: Turn, current: string, caches: Caches) => string
 
-/** The parts of a session file's `message` entries that are read here. */
-interface Entry {
-  type?: string
-  timestamp?: string
-  message?: {
-    role?: string
-    model?: string
-    content?: string | { type?: string; text?: string }[]
-    usage?: { input?: number; output?: number; cacheRead?: number; cacheWrite?: number; cost?: { total?: number } }
-  }
-}
-
-const textOf = (content: NonNullable<Entry['message']>['content']): string =>
-  typeof content === 'string' ? content : (content ?? []).map(b => (b.type === 'text' ? (b.text ?? '') : '')).join(' ')
-
-function sessionTurns(file: string): Turn[] {
-  const turns: Turn[] = []
-  for (const line of fs.readFileSync(file, 'utf8').split('\n')) {
-    let entry: Entry
-    try {
-      entry = JSON.parse(line) as Entry // a session file is omp's own output
-    } catch {
-      continue // a half-written last line
-    }
-    const m = entry?.message
-    if (entry?.type !== 'message' || !m) continue
-    if (m.role === 'user') {
-      turns.push({ tier: classify(textOf(m.content)).tier, requests: [] })
-    } else if (m.role === 'assistant' && m.usage && m.model && PRICES[m.model] && turns.length) {
-      const u = m.usage
-      turns.at(-1)!.requests.push({
-        at: Date.parse(entry.timestamp ?? ''),
-        model: m.model,
-        input: u.input ?? 0,
-        output: u.output ?? 0,
-        read: u.cacheRead ?? 0,
-        write: u.cacheWrite ?? 0,
-        billed: u.cost?.total ?? 0,
-      })
-    }
-  }
-  return turns.filter(t => t.requests.length)
-}
-
+/** The sessions' turns, each with only the requests on models this file can price. */
 function loadSessions(): Turn[][] {
   const since = UNTIL - DAYS * 86_400_000
-  const sessions: Turn[][] = []
-  for (const dir of fs.readdirSync(DIR)) {
-    const folder = path.join(DIR, dir)
-    if (!fs.statSync(folder).isDirectory()) continue
-    for (const name of fs.readdirSync(folder)) {
-      const file = path.join(folder, name)
-      const modified = fs.statSync(file).mtimeMs
-      if (name.endsWith('.jsonl') && modified >= since && modified <= UNTIL) sessions.push(sessionTurns(file))
-    }
-  }
-  return sessions.filter(s => s.length)
+  return sessionFiles(DIR, since, UNTIL)
+    .map(file => sessionTurns(file).map(t => ({ ...t, requests: t.requests.filter(q => PRICES[q.model]) })).filter(t => t.requests.length))
+    .filter(s => s.length)
 }
 
 /** What a turn's requests cost on `model`; the first request reads whatever that model still has cached. */
